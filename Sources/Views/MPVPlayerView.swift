@@ -33,7 +33,12 @@ final class MPVViewController: UIViewController {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    override var canBecomeFocused: Bool { true }
+    override var canBecomeFirstResponder: Bool { true }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        becomeFirstResponder()
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()

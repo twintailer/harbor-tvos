@@ -1,0 +1,135 @@
+name: tvos-build
+
+# Builds an unsigned tvOS IPA of Harbor for Apple TV on a macOS runner.
+# Trigger from the Actions tab or:  gh workflow run tvos-build.yml
+#
+# NOTE on installing: unlike iPhone (AltStore/Sideloadly), sideloading onto an
+# Apple TV needs Xcode on a Mac with the Apple TV paired (Devices window ->
+# Install), or a paid dev account. The unsigned IPA here is the build output;
+# re-sign/install it with your own Apple ID via Xcode.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-tvos:
+    name: tvOS (arm64)
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Generate app-icon brand assets (tvOS requires them)
+        run: |
+          python3 - <<'EOF'
+          import os, zlib, struct, json
+
+          ROOT = "Assets.xcassets"
+          BRAND = os.path.join(ROOT, "App Icon & Top Shelf Image.brandassets")
+
+          def png(path, w, h, rgba=(12, 16, 24, 255)):
+              row = bytes(rgba) * w
+              raw = bytearray()
+              for _ in range(h):
+                  raw.append(0)
+                  raw.extend(row)
+              def chunk(typ, data):
+                  body = typ + data
+                  return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xffffffff)
+              sig = b"\x89PNG\r\n\x1a\n"
+              ihdr = struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0)
+              idat = zlib.compress(bytes(raw), 6)
+              with open(path, "wb") as f:
+                  f.write(sig + chunk(b"IHDR", ihdr) + chunk(b"IDAT", idat) + chunk(b"IEND", b""))
+
+          def write_json(path, obj):
+              with open(path, "w") as f:
+                  json.dump(obj, f, indent=2)
+
+          os.makedirs(ROOT, exist_ok=True)
+          write_json(os.path.join(ROOT, "Contents.json"), {"info": {"author": "xcode", "version": 1}})
+          os.makedirs(BRAND, exist_ok=True)
+
+          def imageset(dirpath, w1, filename):
+              os.makedirs(dirpath, exist_ok=True)
+              png(os.path.join(dirpath, filename), w1[0], w1[1])
+              png2 = filename.replace("_1x", "_2x")
+              png(os.path.join(dirpath, png2), w1[0] * 2, w1[1] * 2)
+              write_json(os.path.join(dirpath, "Contents.json"), {
+                  "images": [
+                      {"idiom": "tv", "filename": filename, "scale": "1x"},
+                      {"idiom": "tv", "filename": png2, "scale": "2x"},
+                  ],
+                  "info": {"author": "xcode", "version": 1},
+              })
+
+          def imagestack(dirpath, layer_w, layer_h):
+              os.makedirs(dirpath, exist_ok=True)
+              layers = []
+              for name in ["Back", "Middle", "Front"]:
+                  layerdir = os.path.join(dirpath, name + ".imagestacklayer")
+                  contentdir = os.path.join(layerdir, "Content.imageset")
+                  imageset(contentdir, (layer_w, layer_h), "icon_1x.png")
+                  write_json(os.path.join(layerdir, "Contents.json"), {"info": {"author": "xcode", "version": 1}})
+                  layers.append({"filename": name + ".imagestacklayer"})
+              write_json(os.path.join(dirpath, "Contents.json"),
+                         {"layers": layers, "info": {"author": "xcode", "version": 1}})
+
+          imagestack(os.path.join(BRAND, "App Icon.imagestack"), 400, 240)
+          imagestack(os.path.join(BRAND, "App Icon - App Store.imagestack"), 1280, 768)
+          imageset(os.path.join(BRAND, "Top Shelf Image.imageset"), (1920, 720), "top_1x.png")
+          imageset(os.path.join(BRAND, "Top Shelf Image Wide.imageset"), (2320, 720), "topwide_1x.png")
+
+          write_json(os.path.join(BRAND, "Contents.json"), {
+              "assets": [
+                  {"filename": "App Icon.imagestack", "idiom": "tv", "role": "primary-app-icon", "size": "400x240"},
+                  {"filename": "App Icon - App Store.imagestack", "idiom": "tv", "role": "primary-app-icon", "size": "1280x768"},
+                  {"filename": "Top Shelf Image.imageset", "idiom": "tv", "role": "top-shelf-image", "size": "1920x720"},
+                  {"filename": "Top Shelf Image Wide.imageset", "idiom": "tv", "role": "top-shelf-image-wide", "size": "2320x720"},
+              ],
+              "info": {"author": "xcode", "version": 1},
+          })
+          print("brand assets generated")
+          EOF
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build (unsigned, appletvos)
+        run: |
+          set -o pipefail
+          xcodebuild -project Harbor.xcodeproj -scheme HarborTV \
+            -configuration Release -sdk appletvos -destination 'generic/platform=tvOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee build.log | tail -40
+
+      - name: Package IPA
+        run: |
+          APP=$(find build -name '*.app' -path '*appletvos*' | head -1)
+          echo "APP: $APP"
+          test -n "$APP"
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          mkdir -p dist
+          (cd . && zip -r -q "dist/Harbor_tvOS_0.1.0_unsigned.ipa" Payload)
+          ls -la dist
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: harbor-tvos
+          path: dist/*.ipa
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          if-no-files-found: ignore

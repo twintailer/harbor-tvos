@@ -2,10 +2,36 @@ import SwiftUI
 
 struct DetailView: View {
     let item: MetaItem
+    @EnvironmentObject private var auth: AuthStore
     @State private var full: MetaItem?
     @State private var player: PlayerTarget?
+    @State private var pickerStreams: [StreamOption]?
+    @State private var resolving = false
 
     private var meta: MetaItem { full ?? item }
+
+    // Resolve streams for a movie or a specific episode via the user's addons,
+    // then auto-play the first direct one — or show a picker.
+    private func play(streamId: String, title: String) {
+        guard !auth.addons.isEmpty else {
+            // Not signed in / no addons: nothing to resolve.
+            pickerStreams = []
+            return
+        }
+        resolving = true
+        Task {
+            let streams = await StreamResolver.streams(
+                addons: auth.addons, type: meta.type, id: streamId)
+            await MainActor.run {
+                resolving = false
+                if let first = streams.first(where: { $0.isPlayable }), let u = URL(string: first.url ?? "") {
+                    player = PlayerTarget(title: title, url: u)
+                } else {
+                    pickerStreams = streams
+                }
+            }
+        }
+    }
 
     var body: some View {
         ZStack {
@@ -32,14 +58,19 @@ struct DetailView: View {
 
                     HStack(spacing: 24) {
                         Button {
-                            player = PlayerTarget(title: meta.name, url: DemoStream.url)
+                            play(streamId: meta.id, title: meta.name)
                         } label: {
-                            Label("Play", systemImage: "play.fill")
+                            Label(resolving ? "Finding streams…" : "Play", systemImage: "play.fill")
                                 .padding(.horizontal, 20)
                         }
                         .buttonStyle(.borderedProminent)
+                        .disabled(resolving)
                     }
                     .padding(.top, 8)
+                    if !auth.isSignedIn {
+                        Text("Sign in (Account tab) to load streams from your addons.")
+                            .font(.system(size: 20)).foregroundStyle(.secondary)
+                    }
 
                     if let desc = meta.description {
                         Text(desc)
@@ -50,7 +81,11 @@ struct DetailView: View {
 
                     if let videos = meta.videos, !videos.isEmpty {
                         EpisodeList(meta: meta, videos: videos) { v in
-                            player = PlayerTarget(title: v.title ?? meta.name, url: DemoStream.url)
+                            // Stremio stream id for an episode: imdbId:season:episode
+                            let sid = (v.season != nil && v.episode != nil)
+                                ? "\(meta.id):\(v.season!):\(v.episode!)"
+                                : (v.id ?? meta.id)
+                            play(streamId: sid, title: v.title ?? meta.name)
                         }
                         .padding(.top, 30)
                     }
@@ -61,6 +96,12 @@ struct DetailView: View {
         }
         .fullScreenCover(item: $player) { target in
             PlayerView(target: target)
+        }
+        .sheet(isPresented: Binding(get: { pickerStreams != nil }, set: { if !$0 { pickerStreams = nil } })) {
+            StreamsView(title: meta.name, streams: pickerStreams ?? []) { s in
+                pickerStreams = nil
+                if let u = URL(string: s.url ?? "") { player = PlayerTarget(title: meta.name, url: u) }
+            }
         }
         .task {
             if full == nil {

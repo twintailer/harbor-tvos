@@ -7,9 +7,11 @@ import SwiftUI
 // Cinemeta) the web app uses.
 @main
 struct HarborTVApp: App {
+    @StateObject private var auth = AuthStore()
+
     var body: some Scene {
         WindowGroup {
-            RootView()
+            RootView().environmentObject(auth)
         }
     }
 }
@@ -23,6 +25,8 @@ struct RootView: View {
                 .tabItem { Label("Discover", systemImage: "square.grid.2x2") }
             SearchView()
                 .tabItem { Label("Search", systemImage: "magnifyingglass") }
+            ProfileView()
+                .tabItem { Label("Account", systemImage: "person.crop.circle") }
         }
     }
 }

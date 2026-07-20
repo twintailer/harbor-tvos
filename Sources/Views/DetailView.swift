@@ -105,7 +105,7 @@ struct DetailView: View {
         }
         .task {
             if full == nil {
-                full = await CatalogService.meta(type: item.type, id: item.id)
+                full = await AddonService.meta(addons: auth.addons, type: item.type, id: item.id)
             }
         }
     }

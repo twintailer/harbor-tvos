@@ -7,6 +7,7 @@ final class AuthStore: ObservableObject {
     @Published var authKey: String?
     @Published var email: String?
     @Published var addons: [Addon] = []
+    @Published var continueWatching: [MetaItem] = []
 
     private let keyAuth = "harbor.stremio.authKey"
     private let keyEmail = "harbor.stremio.email"
@@ -14,7 +15,13 @@ final class AuthStore: ObservableObject {
     init() {
         authKey = UserDefaults.standard.string(forKey: keyAuth)
         email = UserDefaults.standard.string(forKey: keyEmail)
-        if authKey != nil { Task { await loadAddons() } }
+        if authKey != nil { Task { await loadAddons(); await loadContinueWatching() } }
+    }
+
+    func loadContinueWatching() async {
+        guard let authKey else { return }
+        let cw = await StremioService.continueWatching(authKey: authKey)
+        continueWatching = cw.map { $0.asMeta }
     }
 
     var isSignedIn: Bool { authKey != nil }
@@ -26,6 +33,7 @@ final class AuthStore: ObservableObject {
         UserDefaults.standard.set(res.authKey, forKey: keyAuth)
         UserDefaults.standard.set(self.email, forKey: keyEmail)
         await loadAddons()
+        await loadContinueWatching()
     }
 
     func logout() {

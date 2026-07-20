@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct HomeView: View {
+    @EnvironmentObject private var auth: AuthStore
     @State private var rows: [CatalogRow] = []
     @State private var loading = true
 
@@ -13,9 +14,12 @@ struct HomeView: View {
                         .padding(.horizontal, 60)
                         .padding(.top, 40)
 
-                    if loading {
-                        ProgressView().padding(.horizontal, 60)
+                    if !auth.continueWatching.isEmpty {
+                        CatalogRowView(row: CatalogRow(title: "Continue Watching",
+                                                       items: auth.continueWatching))
                     }
+
+                    if loading { ProgressView().padding(.horizontal, 60) }
                     ForEach(rows) { row in
                         CatalogRowView(row: row)
                     }
@@ -26,22 +30,10 @@ struct HomeView: View {
                 DetailView(item: item)
             }
         }
-        .task {
-            if rows.isEmpty { await load() }
-        }
-    }
-
-    private func load() async {
-        async let trendingMovies = CatalogService.catalog(type: "movie", id: "top")
-        async let trendingSeries = CatalogService.catalog(type: "series", id: "top")
-        async let popularMovies = CatalogService.catalog(type: "movie", id: "imdbRating")
-        let built: [CatalogRow] = [
-            CatalogRow(title: "Trending Movies", items: await trendingMovies),
-            CatalogRow(title: "Trending Series", items: await trendingSeries),
-            CatalogRow(title: "Top Rated", items: await popularMovies),
-        ].filter { !$0.items.isEmpty }
-        await MainActor.run {
-            rows = built
+        // Rebuild rows when the signed-in addons change.
+        .task(id: auth.addons.count) {
+            await auth.loadContinueWatching()
+            rows = await AddonService.homeRows(addons: auth.addons)
             loading = false
         }
     }

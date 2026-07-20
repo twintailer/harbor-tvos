@@ -55,9 +55,17 @@ struct DiscoverView: View {
         .task(id: "\(type)-\(genre)") { await load() }
     }
 
+    @EnvironmentObject private var auth: AuthStore
+
     private func load() async {
         loading = true
-        let result = await CatalogService.catalog(type: type, id: "top", genre: genre)
+        // Use a catalog addon that serves this type, else Cinemeta.
+        let addon = auth.addons.first {
+            !($0.manifest?.catalogs ?? []).isEmpty && ($0.manifest?.types?.contains(type) ?? false)
+        }
+        let base = addon?.base ?? CatalogService.cinemeta
+        let catId = addon?.manifest?.catalogs?.first { $0.type == type }?.id ?? "top"
+        let result = await AddonService.catalog(base: base, type: type, id: catId, genre: genre)
         await MainActor.run { items = result; loading = false }
     }
 }

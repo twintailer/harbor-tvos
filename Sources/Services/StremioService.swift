@@ -55,6 +55,12 @@ struct Addon: Codable {
         let name: String?
         let resources: [Resource]?
         let types: [String]?
+        let catalogs: [CatalogDef]?
+    }
+    struct CatalogDef: Codable, Hashable {
+        let type: String
+        let id: String
+        let name: String?
     }
     // resources can be plain strings ("stream") or objects ({name:"stream"}).
     struct Resource: Codable {
@@ -73,8 +79,10 @@ struct Addon: Codable {
     var base: String {
         transportUrl.replacingOccurrences(of: "/manifest.json", with: "")
     }
-    var hasStream: Bool {
-        (manifest?.resources ?? []).contains { $0.name == "stream" }
+    var hasStream: Bool { hasResource("stream") }
+    var hasMeta: Bool { hasResource("meta") }
+    func hasResource(_ r: String) -> Bool {
+        (manifest?.resources ?? []).contains { $0.name == r }
     }
 }
 

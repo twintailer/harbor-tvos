@@ -122,10 +122,11 @@ extension StremioService {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, _) = try await URLSession.shared.data(for: req)
-        struct Env: Codable { let result: T? }
-        guard let r = try JSONDecoder().decode(Env.self, from: data).result else {
+        guard let r = try JSONDecoder().decode(ResultEnvelope<T>.self, from: data).result else {
             throw Err.api("empty")
         }
         return r
     }
 }
+
+private struct ResultEnvelope<T: Codable>: Codable { let result: T? }

@@ -7,6 +7,10 @@ settings:
   base:
     DEVELOPMENT_TEAM: ""
     SWIFT_VERSION: "5.0"
+packages:
+  MPVKit:
+    url: https://github.com/mpvkit/MPVKit
+    exactVersion: 0.41.0
 targets:
   HarborTV:
     type: application
@@ -14,6 +18,9 @@ targets:
     sources:
       - path: Sources
       - path: Assets.xcassets
+    dependencies:
+      - package: MPVKit
+        product: MPVKit
     info:
       path: Info.plist
       properties:
@@ -33,3 +40,4 @@ targets:
         ENABLE_BITCODE: false
         CODE_SIGNING_ALLOWED: false
         CODE_SIGN_IDENTITY: ""
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks"

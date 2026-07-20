@@ -15,7 +15,7 @@ jobs:
   build-tvos:
     name: tvOS (arm64)
     runs-on: macos-latest
-    timeout-minutes: 40
+    timeout-minutes: 70
     steps:
       - uses: actions/checkout@v4
 
@@ -98,14 +98,20 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
+      - name: Resolve Swift packages (MPVKit ~ 24 xcframeworks)
+        run: |
+          xcodebuild -project Harbor.xcodeproj -scheme HarborTV \
+            -clonedSourcePackagesDirPath spm \
+            -resolvePackageDependencies
+
       - name: Build (unsigned, appletvos)
         run: |
           set -o pipefail
           xcodebuild -project Harbor.xcodeproj -scheme HarborTV \
             -configuration Release -sdk appletvos -destination 'generic/platform=tvOS' \
-            -derivedDataPath build \
+            -derivedDataPath build -clonedSourcePackagesDirPath spm \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            build 2>&1 | tee build.log | tail -40
+            build 2>&1 | tee build.log | tail -50
 
       - name: Package IPA
         run: |

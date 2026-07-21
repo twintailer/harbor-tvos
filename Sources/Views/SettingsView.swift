@@ -1,142 +1,189 @@
 import SwiftUI
 
-// Playback / subtitle / audio / episode preferences, mirroring the Harbor iPhone
-// settings that apply to a tvOS player. Values are stored via @AppStorage under the
-// same keys the player and episode list read, so a change here takes effect
-// immediately on the next playback.
+// Settings mirroring the Harbor iPhone app's structure: a category list (one pane
+// at a time, same names and order as the phone shell) that pushes detail panels.
+// Only the categories that exist in the native tvOS build are shown; each option
+// keeps Harbor's naming. Values live in UserDefaults under SubtitleStyle.Key and
+// are read live by the player / episode list.
 struct SettingsView: View {
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    NavigationLink { AccountPanel() } label: {
+                        row("Account", icon: "person.crop.circle")
+                    }
+                    NavigationLink { LibraryPanel() } label: {
+                        row("Library & metadata", icon: "books.vertical")
+                    }
+                }
+                Section {
+                    NavigationLink { PlayerPanel() } label: {
+                        row("Player & quality", icon: "play.rectangle")
+                    }
+                    NavigationLink { LanguagesPanel() } label: {
+                        row("Languages", icon: "globe")
+                    }
+                }
+                Section {
+                    NavigationLink { AboutPanel() } label: {
+                        row("Advanced", icon: "wrench.and.screwdriver")
+                    }
+                }
+            }
+            .navigationTitle("Settings")
+        }
+    }
+
+    private func row(_ label: String, icon: String) -> some View {
+        Label(label, systemImage: icon)
+            .font(.system(size: 28))
+            .padding(.vertical, 8)
+    }
+}
+
+// MARK: - Account
+
+private struct AccountPanel: View {
     @EnvironmentObject private var auth: AuthStore
 
+    var body: some View {
+        List {
+            if auth.isSignedIn {
+                Section("Stremio account") {
+                    LabeledContent("Signed in as", value: auth.email ?? "—")
+                    LabeledContent("Add-ons", value: "\(auth.addons.count)")
+                    LabeledContent("Stream sources", value: "\(auth.addons.filter { $0.hasStream }.count)")
+                }
+                Section {
+                    Button("Sign Out", role: .destructive) { auth.logout() }
+                }
+            } else {
+                Section {
+                    Text("Sign in on the Account tab to load your add-ons, catalogs and Continue Watching.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .navigationTitle("Account")
+    }
+}
+
+// MARK: - Library & metadata
+
+private struct LibraryPanel: View {
+    @AppStorage(SubtitleStyle.Key.episodeSort) private var episodeSort = "oldest"
+    @AppStorage(SubtitleStyle.Key.showEpisodeDesc) private var showEpisodeDesc = true
+
+    var body: some View {
+        List {
+            Section("Episodes") {
+                Picker("Episode order", selection: $episodeSort) {
+                    Text("Oldest first").tag("oldest")
+                    Text("Newest first").tag("newest")
+                }
+                Toggle("Show episode descriptions", isOn: $showEpisodeDesc)
+            }
+        }
+        .navigationTitle("Library & metadata")
+    }
+}
+
+// MARK: - Player & quality
+
+private struct PlayerPanel: View {
     @AppStorage(SubtitleStyle.Key.videoSize) private var videoSize = "original"
     @AppStorage(SubtitleStyle.Key.defaultSpeed) private var defaultSpeed = 1.0
     @AppStorage(SubtitleStyle.Key.seekStep) private var seekStep = 10
+    @AppStorage(SubtitleStyle.Key.audioNormalize) private var audioNormalize = false
 
+    var body: some View {
+        List {
+            Section("Aspect ratio") {
+                Picker("Video size", selection: $videoSize) {
+                    Text("Fit").tag("original")
+                    Text("Fill").tag("fill")
+                    Text("Stretch").tag("stretch")
+                }
+            }
+            Section("Playback") {
+                Picker("Default speed", selection: $defaultSpeed) {
+                    ForEach(SubtitleStyle.speeds, id: \.self) { s in
+                        Text(s == 1.0 ? "Normal" : String(format: "%gx", s)).tag(s)
+                    }
+                }
+                Picker("Skip step", selection: $seekStep) {
+                    ForEach(SubtitleStyle.seekSteps, id: \.self) { s in
+                        Text("\(s) seconds").tag(s)
+                    }
+                }
+            }
+            Section {
+                Toggle("Normalize loudness", isOn: $audioNormalize)
+            } header: {
+                Text("Audio")
+            } footer: {
+                Text("Evens out quiet dialogue and loud action. Applies on next playback.")
+            }
+        }
+        .navigationTitle("Player & quality")
+    }
+}
+
+// MARK: - Languages (audio/sub preferences + subtitle style, like Harbor)
+
+private struct LanguagesPanel: View {
+    @AppStorage(SubtitleStyle.Key.audioLang) private var audioLang = ""
+    @AppStorage(SubtitleStyle.Key.subLang) private var subLang = ""
+    @AppStorage(SubtitleStyle.Key.subsOff) private var subsOff = false
     @AppStorage(SubtitleStyle.Key.size) private var subSize = SubtitleStyle.defaultSize
     @AppStorage(SubtitleStyle.Key.color) private var subColor = SubtitleStyle.defaultColor
     @AppStorage(SubtitleStyle.Key.style) private var subStyle = SubtitleStyle.defaultStyle
     @AppStorage(SubtitleStyle.Key.bold) private var subBold = false
-    @AppStorage(SubtitleStyle.Key.subLang) private var subLang = ""
-    @AppStorage(SubtitleStyle.Key.subsOff) private var subsOff = false
-
-    @AppStorage(SubtitleStyle.Key.audioLang) private var audioLang = ""
-    @AppStorage(SubtitleStyle.Key.audioNormalize) private var audioNormalize = false
-
-    @AppStorage(SubtitleStyle.Key.episodeSort) private var episodeSort = "oldest"
-    @AppStorage(SubtitleStyle.Key.showEpisodeDesc) private var showEpisodeDesc = true
-
-    private let videoSizes: [SubtitleStyle.Preset] = [
-        .init(id: "original", label: "Fit"),
-        .init(id: "fill", label: "Fill"),
-        .init(id: "stretch", label: "Stretch"),
-    ]
-    private let sortOptions: [SubtitleStyle.Preset] = [
-        .init(id: "oldest", label: "Oldest first"),
-        .init(id: "newest", label: "Newest first"),
-    ]
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 40) {
-                    Text("Settings")
-                        .font(.system(size: 56, weight: .bold))
-                        .padding(.horizontal, 60).padding(.top, 40)
-
-                    section("Account") {
-                        if auth.isSignedIn {
-                            VStack(alignment: .leading, spacing: 14) {
-                                Text(auth.email ?? "Signed in")
-                                    .font(.system(size: 24)).foregroundStyle(.white.opacity(0.85))
-                                Text("\(auth.addons.count) add-ons · \(auth.addons.filter { $0.hasStream }.count) stream sources")
-                                    .font(.system(size: 19)).foregroundStyle(.white.opacity(0.5))
-                                Button("Sign Out", role: .destructive) { auth.logout() }
-                                    .buttonStyle(.bordered)
-                            }
-                        } else {
-                            Text("Sign in on the Account tab to load your add-ons, catalogs and Continue Watching.")
-                                .font(.system(size: 21)).foregroundStyle(.white.opacity(0.6))
-                        }
-                    }
-
-                    section("Playback") {
-                        row("Video Size") { chips(videoSizes, sel: videoSize) { videoSize = $0 } }
-                        row("Default Speed") {
-                            chips(SubtitleStyle.speeds.map { .init(id: String($0), label: $0 == 1 ? "Normal" : "\($0.clean)x") },
-                                  sel: String(defaultSpeed)) { defaultSpeed = Double($0) ?? 1.0 }
-                        }
-                        row("Skip Step") {
-                            chips(SubtitleStyle.seekSteps.map { .init(id: String($0), label: "\($0)s") },
-                                  sel: String(seekStep)) { seekStep = Int($0) ?? 10 }
-                        }
-                    }
-
-                    section("Subtitles") {
-                        row("Size") { chips(SubtitleStyle.sizes, sel: subSize) { subSize = $0 } }
-                        row("Colour") { chips(SubtitleStyle.colors, sel: subColor) { subColor = $0 } }
-                        row("Style") { chips(SubtitleStyle.styles, sel: subStyle) { subStyle = $0 } }
-                        row("Bold") { toggle(subBold) { subBold.toggle() } }
-                        row("Preferred Language") { chips(SubtitleStyle.languages, sel: subLang) { subLang = $0 } }
-                        row("Off by Default") { toggle(subsOff) { subsOff.toggle() } }
-                    }
-
-                    section("Audio") {
-                        row("Preferred Language") { chips(SubtitleStyle.languages, sel: audioLang) { audioLang = $0 } }
-                        row("Normalize Loudness") { toggle(audioNormalize) { audioNormalize.toggle() } }
-                    }
-
-                    section("Episodes") {
-                        row("Order") { chips(sortOptions, sel: episodeSort) { episodeSort = $0 } }
-                        row("Show Descriptions") { toggle(showEpisodeDesc) { showEpisodeDesc.toggle() } }
-                    }
-
-                    Text("Harbor for Apple TV — settings apply on next playback")
-                        .font(.system(size: 17)).foregroundStyle(.white.opacity(0.3))
-                        .padding(.horizontal, 60).padding(.top, 8)
+        List {
+            Section("Preferred languages") {
+                Picker("Audio language", selection: $audioLang) {
+                    ForEach(SubtitleStyle.languages) { l in Text(l.label).tag(l.id) }
                 }
-                .padding(.bottom, 80)
+                Picker("Subtitle language", selection: $subLang) {
+                    ForEach(SubtitleStyle.languages) { l in Text(l.label).tag(l.id) }
+                }
+                Toggle("Subtitles off by default", isOn: $subsOff)
+            }
+            Section {
+                Picker("Size", selection: $subSize) {
+                    ForEach(SubtitleStyle.sizes) { s in Text(s.label).tag(s.id) }
+                }
+                Picker("Text color", selection: $subColor) {
+                    ForEach(SubtitleStyle.colors) { c in Text(c.label).tag(c.id) }
+                }
+                Picker("Style", selection: $subStyle) {
+                    ForEach(SubtitleStyle.styles) { s in Text(s.label).tag(s.id) }
+                }
+                Toggle("Bold", isOn: $subBold)
+            } header: {
+                Text("Subtitle style")
+            } footer: {
+                Text("Style changes apply on next playback, or immediately via the player's subtitle menu.")
             }
         }
-    }
-
-    // MARK: - building blocks
-
-    private func section<Content: View>(_ title: String, @ViewBuilder _ content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text(title).font(.system(size: 32, weight: .bold)).foregroundStyle(.white)
-            content()
-        }
-        .padding(.horizontal, 60)
-    }
-
-    private func row<Content: View>(_ label: String, @ViewBuilder _ control: () -> Content) -> some View {
-        HStack(alignment: .center, spacing: 30) {
-            Text(label).font(.system(size: 24)).foregroundStyle(.white.opacity(0.8))
-                .frame(width: 340, alignment: .leading)
-            control()
-            Spacer(minLength: 0)
-        }
-    }
-
-    private func chips(_ options: [SubtitleStyle.Preset], sel: String, _ pick: @escaping (String) -> Void) -> some View {
-        HStack(spacing: 14) {
-            ForEach(options) { o in
-                Button(o.label) { pick(o.id) }
-                    .buttonStyle(.bordered)
-                    .tint(sel == o.id ? .green : .gray)
-            }
-        }
-    }
-
-    private func toggle(_ on: Bool, _ act: @escaping () -> Void) -> some View {
-        Button(on ? "On" : "Off") { act() }
-            .buttonStyle(.bordered)
-            .tint(on ? .green : .gray)
+        .navigationTitle("Languages")
     }
 }
 
-private extension Double {
-    // "1.5" not "1.50", "0.75" as-is — for speed chip labels.
-    var clean: String {
-        self == rounded() ? String(Int(self)) : String(self)
+// MARK: - Advanced / about
+
+private struct AboutPanel: View {
+    var body: some View {
+        List {
+            Section("About") {
+                LabeledContent("App", value: "Harbor for Apple TV")
+                LabeledContent("Version", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—")
+                LabeledContent("Player", value: "mpv (MPVKit)")
+            }
+        }
+        .navigationTitle("Advanced")
     }
 }

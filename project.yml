@@ -31,6 +31,10 @@ targets:
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
         UIUserInterfaceStyle: Dark
+        # Explicit UIScene adoption — tvOS 26 runs legacy-lifecycle apps in a
+        # compatibility mode that has caused AV glitches (StremioX sets this too).
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.harbor.tvos

@@ -15,8 +15,7 @@ struct HomeView: View {
                         .padding(.top, 40)
 
                     if !auth.continueWatching.isEmpty {
-                        CatalogRowView(row: CatalogRow(title: "Continue Watching",
-                                                       items: auth.continueWatching))
+                        ContinueRowView(entries: auth.continueWatching)
                     }
 
                     if loading { ProgressView().padding(.horizontal, 60) }
@@ -39,6 +38,27 @@ struct HomeView: View {
     }
 }
 
+struct ContinueRowView: View {
+    let entries: [CwItem]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Continue Watching")
+                .font(.system(size: 30, weight: .semibold))
+                .padding(.horizontal, 60)
+            ScrollView(.horizontal) {
+                LazyHStack(alignment: .top, spacing: 32) {
+                    ForEach(entries) { entry in
+                        ContinueCard(entry: entry)
+                    }
+                }
+                .padding(.horizontal, 60)
+                .padding(.vertical, 12)
+            }
+        }
+    }
+}
+
 struct CatalogRowView: View {
     let row: CatalogRow
 
@@ -48,12 +68,9 @@ struct CatalogRowView: View {
                 .font(.system(size: 30, weight: .semibold))
                 .padding(.horizontal, 60)
             ScrollView(.horizontal) {
-                LazyHStack(spacing: 32) {
+                LazyHStack(alignment: .top, spacing: 32) {
                     ForEach(row.items) { item in
-                        NavigationLink(value: item) {
-                            PosterCard(item: item)
-                        }
-                        .buttonStyle(.card)
+                        PosterCard(item: item)
                     }
                 }
                 .padding(.horizontal, 60)

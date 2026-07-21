@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 
 // Harbor for Apple TV — a NATIVE SwiftUI rewrite of the Harbor Stremio
 // client. The iOS/desktop app is a Tauri WebView (React); tvOS has no
@@ -8,6 +9,13 @@ import SwiftUI
 @main
 struct HarborTVApp: App {
     @StateObject private var auth = AuthStore()
+
+    init() {
+        // Category only — no setActive. The audio output driver activates the session when
+        // it starts; a long-form .playback/.moviePlayback category is what tvOS expects
+        // from a media app and is safe to declare up front.
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+    }
 
     var body: some Scene {
         WindowGroup {

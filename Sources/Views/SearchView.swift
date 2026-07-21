@@ -11,8 +11,7 @@ struct SearchView: View {
             ScrollView {
                 LazyVGrid(columns: columns, spacing: 40) {
                     ForEach(results) { item in
-                        NavigationLink(value: item) { PosterCard(item: item, width: 200) }
-                            .buttonStyle(.card)
+                        PosterCard(item: item, width: 200)
                     }
                 }
                 .padding(60)

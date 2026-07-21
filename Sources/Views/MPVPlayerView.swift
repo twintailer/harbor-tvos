@@ -1,5 +1,6 @@
 import SwiftUI
 import Libmpv
+import os
 
 // libmpv-backed player for tvOS. AVPlayer can't decode MKV / most Stremio
 // containers; mpv plays everything. Mirrors the hard-won iOS settings
@@ -36,6 +37,7 @@ final class MPVViewController: UIViewController {
     private var metalLayer: CAMetalLayer?
     private var poll: Timer?
     private let mpvQueue = DispatchQueue(label: "app.harbor.tvos.mpv")
+    private let log = Logger(subsystem: "app.harbor.tvos", category: "mpv")
 
     init(url: URL, model: PlayerModel) {
         self.url = url
@@ -122,6 +124,7 @@ final class MPVViewController: UIViewController {
         mpv = ctx
         // "fast" baseline for constrained GPUs, then our explicit options.
         mpv_set_option_string(ctx, "profile", "fast")
+        mpv_request_log_messages(ctx, "warn")   // surfaced via the event loop below
         var wid = Int64(Int(bitPattern: Unmanaged.passUnretained(layer).toOpaque()))
         mpv_set_option(ctx, "wid", MPV_FORMAT_INT64, &wid)
         setOpt("vo", "gpu-next")
@@ -129,6 +132,11 @@ final class MPVViewController: UIViewController {
         setOpt("gpu-context", "moltenvk")
         setOpt("hwdec", "videotoolbox")
         setOpt("video-rotate", "no")
+        // Audio output: try Apple's AVSampleBufferAudioRenderer driver first — it is the
+        // sanctioned tvOS path and manages the audio session itself. Fall back through the
+        // other Apple drivers if this MPVKit build lacks it. (Default driver order produced
+        // silence on Apple TV even though the same defaults play on iPhone.)
+        setOpt("ao", "avfoundation,coreaudio,audiounit")
         // Subtitles: match OS language, auto-load, embedded fonts.
         setOpt("subs-match-os-language", "yes")
         setOpt("subs-fallback", "yes")
@@ -150,7 +158,43 @@ final class MPVViewController: UIViewController {
         setOpt("demuxer-max-back-bytes", "64MiB")
         setOpt("keep-open", "yes")
         mpv_initialize(ctx)
+
+        // Event loop: drain mpv's queue off-main. Captures warnings/errors (incl. audio-output
+        // failures) into the unified log and keeps the queue from overflowing.
+        mpv_set_wakeup_callback(ctx, { ctx in
+            let me = unsafeBitCast(ctx, to: MPVViewController.self)
+            me.drainEvents()
+        }, UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque()))
+
         command(["loadfile", url.absoluteString])
+    }
+
+    private func drainEvents() {
+        mpvQueue.async { [weak self] in
+            guard let self else { return }
+            // Capture the handle per iteration: destroy is serialized on this same queue, so a
+            // non-nil handle read here stays valid for the duration of the block.
+            while let handle = self.mpv {
+                guard let event = mpv_wait_event(handle, 0), event.pointee.event_id != MPV_EVENT_NONE else { break }
+                switch event.pointee.event_id {
+                case MPV_EVENT_LOG_MESSAGE:
+                    if let msg = UnsafeMutablePointer<mpv_event_log_message>(OpaquePointer(event.pointee.data)) {
+                        let prefix = String(cString: msg.pointee.prefix)
+                        let text = String(cString: msg.pointee.text).trimmingCharacters(in: .newlines)
+                        if !text.isEmpty { self.log.warning("[\(prefix, privacy: .public)] \(text, privacy: .public)") }
+                    }
+                case MPV_EVENT_END_FILE:
+                    if let data = event.pointee.data {
+                        let ef = UnsafePointer<mpv_event_end_file>(OpaquePointer(data)).pointee
+                        if ef.reason == MPV_END_FILE_REASON_ERROR {
+                            let msg = String(cString: mpv_error_string(ef.error))
+                            self.log.error("end-file error: \(msg, privacy: .public)")
+                        }
+                    }
+                default: break
+                }
+            }
+        }
     }
 
     private func tick() {
@@ -205,10 +249,14 @@ final class MPVViewController: UIViewController {
     func setSubDelay(_ s: Double) { mpvQueue.async { [weak self] in self?.setString("sub-delay", String(format: "%.2f", s)) } }
     func setAudioDelay(_ s: Double) { mpvQueue.async { [weak self] in self?.setString("audio-delay", String(format: "%.2f", s)) } }
 
-    /// Media summary for the metadata line: encoded video height + active audio codec.
-    func mediaSummary() -> (height: Int, audioCodec: String) {
-        guard mpv != nil else { return (0, "") }
-        return (getInt("video-params/h"), getString("audio-codec-name") ?? "")
+    /// Media summary for the metadata line: encoded video height, active audio codec, and the
+    /// audio-output driver actually in use ("" = audio failed to initialize — the key diagnostic
+    /// for the no-sound reports).
+    func mediaSummary() -> (height: Int, audioCodec: String, audioOut: String) {
+        guard mpv != nil else { return (0, "", "") }
+        return (getInt("video-params/h"),
+                getString("audio-codec-name") ?? "",
+                getString("current-ao") ?? "")
     }
 
     private(set) var videoSizeMode = UserDefaults.standard.string(forKey: SubtitleStyle.Key.videoSize) ?? "original"
@@ -236,10 +284,12 @@ final class MPVViewController: UIViewController {
 
     func shutdown() {
         poll?.invalidate(); poll = nil
-        mpvQueue.async { [weak self] in
-            guard let self, let ctx = self.mpv else { return }
-            self.mpv = nil
-            mpv_terminate_destroy(ctx)
-        }
+        guard let ctx = mpv else { return }
+        // Clear the wakeup callback FIRST so it can't fire into a deallocated controller,
+        // then wind the core down now (quit is thread-safe) and destroy off-main.
+        mpv_set_wakeup_callback(ctx, nil, nil)
+        mpv_command_string(ctx, "quit")
+        mpv = nil
+        mpvQueue.async { mpv_terminate_destroy(ctx) }
     }
 }

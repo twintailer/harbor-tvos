@@ -22,28 +22,50 @@ jobs:
       - name: Install xcodegen
         run: brew install xcodegen
 
-      - name: Generate app-icon brand assets (tvOS requires them)
+      - name: Generate app-icon brand assets (real Harbor icon)
         run: |
+          python3 -m pip install --quiet --user pillow || python3 -m pip install --quiet --break-system-packages pillow
           python3 - <<'EOF'
-          import os, zlib, struct, json
+          # Composites the real Harbor icon (Resources/AppIconSource.png, same art as the
+          # iPhone/Windows app) into every tvOS brand-asset format. Layered icons put the
+          # art on the Back layer; Middle/Front stay transparent (standard parallax setup).
+          import os, json
+          from PIL import Image
+
+          SRC = Image.open("Resources/AppIconSource.png").convert("RGBA")
+          # Full-bleed square art -> cover-crop for icon shapes; transparent logo -> center on dark bg.
+          corner = SRC.getpixel((2, 2))
+          FULL_BLEED = corner[3] > 250
+          BG = (13, 17, 23, 255)
+
+          def cover(w, h):
+              scale = max(w / SRC.width, h / SRC.height)
+              img = SRC.resize((round(SRC.width * scale), round(SRC.height * scale)), Image.LANCZOS)
+              x = (img.width - w) // 2
+              y = (img.height - h) // 2
+              return img.crop((x, y, x + w, y + h))
+
+          def centered(w, h, frac):
+              img = Image.new("RGBA", (w, h), BG)
+              target_h = int(h * frac)
+              scale = target_h / SRC.height
+              logo = SRC.resize((round(SRC.width * scale), target_h), Image.LANCZOS)
+              img.paste(logo, ((w - logo.width) // 2, (h - logo.height) // 2), logo)
+              return img
+
+          def icon_art(w, h):
+              # Landscape icon: crop the square art if full-bleed, else center the logo.
+              return cover(w, h) if FULL_BLEED else centered(w, h, 0.72)
+
+          def shelf_art(w, h):
+              # Top shelf is extremely wide; always center the logo on a dark banner.
+              return centered(w, h, 0.55)
+
+          def transparent(w, h):
+              return Image.new("RGBA", (w, h), (0, 0, 0, 0))
 
           ROOT = "Assets.xcassets"
           BRAND = os.path.join(ROOT, "App Icon & Top Shelf Image.brandassets")
-
-          def png(path, w, h, rgba=(12, 16, 24, 255)):
-              row = bytes(rgba) * w
-              raw = bytearray()
-              for _ in range(h):
-                  raw.append(0)
-                  raw.extend(row)
-              def chunk(typ, data):
-                  body = typ + data
-                  return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xffffffff)
-              sig = b"\x89PNG\r\n\x1a\n"
-              ihdr = struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0)
-              idat = zlib.compress(bytes(raw), 6)
-              with open(path, "wb") as f:
-                  f.write(sig + chunk(b"IHDR", ihdr) + chunk(b"IDAT", idat) + chunk(b"IEND", b""))
 
           def write_json(path, obj):
               with open(path, "w") as f:
@@ -53,11 +75,12 @@ jobs:
           write_json(os.path.join(ROOT, "Contents.json"), {"info": {"author": "xcode", "version": 1}})
           os.makedirs(BRAND, exist_ok=True)
 
-          def imageset(dirpath, w1, filename):
+          def imageset(dirpath, size, filename, render):
               os.makedirs(dirpath, exist_ok=True)
-              png(os.path.join(dirpath, filename), w1[0], w1[1])
+              w, h = size
+              render(w, h).save(os.path.join(dirpath, filename))
               png2 = filename.replace("_1x", "_2x")
-              png(os.path.join(dirpath, png2), w1[0] * 2, w1[1] * 2)
+              render(w * 2, h * 2).save(os.path.join(dirpath, png2))
               write_json(os.path.join(dirpath, "Contents.json"), {
                   "images": [
                       {"idiom": "tv", "filename": filename, "scale": "1x"},
@@ -66,13 +89,14 @@ jobs:
                   "info": {"author": "xcode", "version": 1},
               })
 
-          def imagestack(dirpath, layer_w, layer_h):
+          def imagestack(dirpath, w, h):
               os.makedirs(dirpath, exist_ok=True)
               layers = []
               for name in ["Back", "Middle", "Front"]:
                   layerdir = os.path.join(dirpath, name + ".imagestacklayer")
                   contentdir = os.path.join(layerdir, "Content.imageset")
-                  imageset(contentdir, (layer_w, layer_h), "icon_1x.png")
+                  render = icon_art if name == "Back" else transparent
+                  imageset(contentdir, (w, h), "icon_1x.png", render)
                   write_json(os.path.join(layerdir, "Contents.json"), {"info": {"author": "xcode", "version": 1}})
                   layers.append({"filename": name + ".imagestacklayer"})
               write_json(os.path.join(dirpath, "Contents.json"),
@@ -80,8 +104,8 @@ jobs:
 
           imagestack(os.path.join(BRAND, "App Icon.imagestack"), 400, 240)
           imagestack(os.path.join(BRAND, "App Icon - App Store.imagestack"), 1280, 768)
-          imageset(os.path.join(BRAND, "Top Shelf Image.imageset"), (1920, 720), "top_1x.png")
-          imageset(os.path.join(BRAND, "Top Shelf Image Wide.imageset"), (2320, 720), "topwide_1x.png")
+          imageset(os.path.join(BRAND, "Top Shelf Image.imageset"), (1920, 720), "top_1x.png", shelf_art)
+          imageset(os.path.join(BRAND, "Top Shelf Image Wide.imageset"), (2320, 720), "topwide_1x.png", shelf_art)
 
           write_json(os.path.join(BRAND, "Contents.json"), {
               "assets": [
@@ -92,7 +116,7 @@ jobs:
               ],
               "info": {"author": "xcode", "version": 1},
           })
-          print("brand assets generated")
+          print("brand assets generated from Resources/AppIconSource.png (full_bleed=%s)" % FULL_BLEED)
           EOF
 
       - name: Generate Xcode project

@@ -117,8 +117,9 @@ struct DetailView: View {
 
     private var playLabelText: String {
         if resolving { return "Finding streams…" }
-        if item.type == "series", let s = libItem?.state, let se = s.season, let ep = s.episode {
-            return "Resume S\(se)·E\(ep)"
+        // Only claim a resumable episode when the state actually names one (S0·E0 = none).
+        if item.type == "series", let se = libItem?.seasonEpisode, se.episode > 0 {
+            return "Resume S\(se.season)·E\(se.episode)"
         }
         if (libItem?.state?.timeOffset ?? 0) > 0 { return "Resume" }
         return "Play"
@@ -127,8 +128,8 @@ struct DetailView: View {
     /// For a series, resume the current episode from the library state; otherwise the movie id.
     private var resumeStreamId: String? {
         guard item.type == "series", let s = libItem?.state else { return nil }
-        if let vid = s.video_id, !vid.isEmpty { return vid }
-        if let se = s.season, let ep = s.episode { return "\(meta.id):\(se):\(ep)" }
+        if let vid = s.video_id, vid.split(separator: ":").count >= 3 { return vid }
+        if let se = libItem?.seasonEpisode, se.episode > 0 { return "\(meta.id):\(se.season):\(se.episode)" }
         return nil
     }
 
@@ -143,8 +144,11 @@ struct DetailView: View {
 
     private func selectedSeasonBinding(_ videos: [MetaItem.Video]) -> Binding<Int> {
         let seasons = Array(Set(videos.compactMap { $0.season })).sorted()
+        // Never default to season 0 (specials — often empty, which made the episode list look
+        // missing entirely). Library season only counts when it's a real (>0, existing) season.
+        let fromLibrary = libItem?.seasonEpisode?.season
         let current = selectedSeason
-            ?? libItem?.state?.season
+            ?? fromLibrary.flatMap { $0 > 0 && seasons.contains($0) ? $0 : nil }
             ?? seasons.first(where: { $0 > 0 })
             ?? seasons.first ?? 1
         return Binding(get: { current }, set: { selectedSeason = $0 })
@@ -153,10 +157,11 @@ struct DetailView: View {
     /// Approximate per-episode watched/progress from the single library state: episodes before the
     /// current one are watched; the current one shows its progress ratio.
     private func watchedState(_ v: MetaItem.Video) -> EpisodeProgress {
-        guard let s = libItem?.state, let curSeason = s.season, let curEp = s.episode,
+        guard let se = libItem?.seasonEpisode, se.episode > 0,
               let vs = v.season, let ve = v.episode else {
             return .init(watched: false, ratio: 0, current: false)
         }
+        let curSeason = se.season, curEp = se.episode
         if vs < curSeason || (vs == curSeason && ve < curEp) {
             return .init(watched: true, ratio: 0, current: false)
         }
@@ -208,8 +213,14 @@ struct SeriesEpisodes: View {
                 }
             }
 
-            ForEach(Array(episodesInSeason.enumerated()), id: \.offset) { _, v in
-                EpisodeRowTV(meta: meta, video: v, progress: watched(v)) { onPlay(v) }
+            LazyVStack(alignment: .leading, spacing: 6) {
+                ForEach(Array(episodesInSeason.enumerated()), id: \.offset) { _, v in
+                    EpisodeRowTV(meta: meta, video: v, progress: watched(v)) { onPlay(v) }
+                }
+                if episodesInSeason.isEmpty {
+                    Text("No episodes listed for this season.")
+                        .font(.system(size: 20)).foregroundStyle(.white.opacity(0.5))
+                }
             }
         }
         .frame(maxWidth: 1400, alignment: .leading)

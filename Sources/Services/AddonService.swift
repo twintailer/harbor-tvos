@@ -72,6 +72,15 @@ enum AddonService {
 
 // --- Continue Watching (Stremio library) -----------------------------------
 
+/// One Continue Watching entry: the meta to navigate with, plus what the card shows.
+struct CwItem: Identifiable {
+    var id: String { meta.id }
+    let meta: MetaItem
+    let season: Int?
+    let episode: Int?
+    let progress: Double
+}
+
 extension StremioService {
     struct LibraryItem: Codable {
         let _id: String
@@ -111,6 +120,25 @@ extension StremioService {
             MetaItem(id: _id, type: type ?? "movie", name: name ?? _id,
                      poster: poster, background: background, description: nil,
                      releaseInfo: nil, imdbRating: nil, genres: nil, runtime: nil, videos: nil)
+        }
+
+        /// Season/episode for the CW card: state fields first, else parsed from
+        /// video_id ("tt1234:3:4"), matching Harbor's episodeFromVideoId.
+        var seasonEpisode: (season: Int, episode: Int)? {
+            if let s = state?.season, let e = state?.episode, s > 0 || e > 0 { return (s, e) }
+            let parts = (state?.video_id ?? "").split(separator: ":")
+            guard parts.count >= 3,
+                  let s = Int(parts[parts.count - 2]), let e = Int(parts[parts.count - 1]),
+                  s >= 0, e > 0 else { return nil }
+            return (s, e)
+        }
+
+        var asCwItem: CwItem {
+            let se = seasonEpisode
+            return CwItem(meta: asMeta,
+                          season: (type ?? "") == "movie" ? nil : se?.season,
+                          episode: (type ?? "") == "movie" ? nil : se?.episode,
+                          progress: progressRatio)
         }
     }
 

@@ -27,6 +27,7 @@ struct PlayerView: View {
     @State private var subtitleTracks: [MPVTrack] = []
     @State private var videoHeight = 0
     @State private var audioCodec = ""
+    @State private var audioOut = ""
     @State private var appliedAutoTracks = false
     @State private var lastTrackRefresh = Date.distantPast
 
@@ -47,7 +48,7 @@ struct PlayerView: View {
     @AppStorage(SubtitleStyle.Key.defaultSpeed) private var defaultSpeed = 1.0
     @AppStorage(SubtitleStyle.Key.seekStep) private var seekStep = 10
 
-    private enum Control: Hashable { case close, scrub, restart, back, play, fwd, audio, subs, aspect, speed }
+    private enum Control: Hashable { case scrub, restart, back, play, fwd, audio, subs, aspect, speed }
     private enum PanelKind { case audio, subtitles, subtitleSettings, aspect, speed }
     @State private var selected: Control = .play
     @State private var lastButton: Control = .play
@@ -134,7 +135,6 @@ struct PlayerView: View {
     private func horizontal(_ d: Int) {
         switch selected {
         case .scrub: scrubBy(d)
-        case .close: flashControls()
         default:
             let row = buttonRow
             let i = row.firstIndex(of: selected) ?? 0
@@ -144,11 +144,11 @@ struct PlayerView: View {
         }
     }
 
+    /// Two rows only: scrubber ↔ buttons.
     private func vertical(_ d: Int) {
         commitScrubIfNeeded()
         switch selected {
-        case .close: if d > 0 { selected = .scrub }
-        case .scrub: selected = d < 0 ? .close : lastButton
+        case .scrub: if d > 0 { selected = lastButton }
         default: if d < 0 { selected = .scrub }
         }
         flashControls()
@@ -156,7 +156,6 @@ struct PlayerView: View {
 
     private func activate(_ c: Control) {
         switch c {
-        case .close:   dismiss()
         case .scrub:   scrubbing ? commitScrub() : toggle()
         case .restart: restart()
         case .back:    seek(-Double(seekStep))
@@ -182,31 +181,29 @@ struct PlayerView: View {
         default:          break
         }
         if !audioCodec.isEmpty { parts.append(audioCodec.uppercased()) }
+        if abs(speed - 1.0) > 0.01 { parts.append(String(format: "%gx", speed)) }
+        // Audio-output diagnostic: which driver is actually producing sound ("AO —" = none).
+        parts.append(audioOut.isEmpty ? "AO —" : "AO \(audioOut)")
         return parts.joined(separator: "  ·  ")
     }
 
+    /// Harbor-style bar: ONE block hugging the bottom edge — title + info line,
+    /// then the scrubber, then the transport row (left cluster) and the
+    /// track/format buttons (right cluster).
     private var controlBar: some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .top, spacing: 24) {
-                ctrlButton(.close, "chevron.left")
-                Spacer(minLength: 24)
-                VStack(alignment: .trailing, spacing: 6) {
+        VStack {
+            Spacer()
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 4) {
                     if !target.title.isEmpty {
-                        Text(target.title).font(.system(size: 30, weight: .semibold))
+                        Text(target.title).font(.system(size: 28, weight: .semibold))
                             .foregroundStyle(.white).lineLimit(1)
                     }
                     if !metadataLine.isEmpty {
-                        Text(metadataLine).font(.system(size: 20))
-                            .foregroundStyle(.white.opacity(0.65))
+                        Text(metadataLine).font(.system(size: 18))
+                            .foregroundStyle(.white.opacity(0.6))
                     }
                 }
-            }
-            .padding(.horizontal, 60).padding(.top, 50)
-            .background(LinearGradient(colors: [.black.opacity(0.6), .clear], startPoint: .top, endPoint: .bottom))
-
-            Spacer()
-
-            VStack(spacing: 24) {
                 HStack(spacing: 16) {
                     Text(timeString(scrubbing ? scrubTarget : model.position)).font(.callout.monospacedDigit())
                         .foregroundStyle(scrubbing ? accent : .white)
@@ -214,20 +211,31 @@ struct PlayerView: View {
                     Text(timeString(model.duration)).font(.callout.monospacedDigit())
                         .foregroundStyle(.white.opacity(0.65))
                 }
-                HStack(spacing: 20) {
-                    ctrlButton(.restart, "arrow.counterclockwise")
-                    ctrlButton(.back, "gobackward.\(seekStep)")
-                    ctrlButton(.play, model.paused ? "play.fill" : "pause.fill", big: true)
-                    ctrlButton(.fwd, "goforward.\(seekStep)")
-                    if !audioTracks.isEmpty { ctrlButton(.audio, "waveform") }
-                    ctrlButton(.subs, "captions.bubble")
-                    ctrlButton(.aspect, "aspectratio")
-                    ctrlButton(.speed, "speedometer")
+                HStack {
+                    HStack(spacing: 18) {
+                        ctrlButton(.restart, "arrow.counterclockwise")
+                        ctrlButton(.back, "gobackward.\(seekStep)")
+                        ctrlButton(.play, model.paused ? "play.fill" : "pause.fill", big: true)
+                        ctrlButton(.fwd, "goforward.\(seekStep)")
+                    }
+                    Spacer()
+                    HStack(spacing: 18) {
+                        if !audioTracks.isEmpty { ctrlButton(.audio, "waveform") }
+                        ctrlButton(.subs, "captions.bubble")
+                        ctrlButton(.speed, "speedometer")
+                        ctrlButton(.aspect, "aspectratio")
+                    }
                 }
             }
-            .padding(.horizontal, 60).padding(.bottom, 50)
-            .background(LinearGradient(colors: [.clear, .black.opacity(0.9)], startPoint: .top, endPoint: .bottom))
+            .padding(.horizontal, 70)
+            .padding(.top, 60)
+            .padding(.bottom, 36)
+            .background(
+                LinearGradient(colors: [.clear, .black.opacity(0.92)],
+                               startPoint: .top, endPoint: .bottom)
+            )
         }
+        .ignoresSafeArea()
         .transition(.opacity)
     }
 
@@ -427,7 +435,7 @@ struct PlayerView: View {
         audioTracks = model.controller?.tracks(ofType: "audio") ?? []
         subtitleTracks = model.controller?.tracks(ofType: "sub") ?? []
         let s = model.controller?.mediaSummary()
-        videoHeight = s?.height ?? 0; audioCodec = s?.audioCodec ?? ""
+        videoHeight = s?.height ?? 0; audioCodec = s?.audioCodec ?? ""; audioOut = s?.audioOut ?? ""
     }
     private func refreshTracksSoon() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { refreshTracks() }
@@ -508,7 +516,7 @@ struct PlayerView: View {
 
     private func showControls() {
         withAnimation { showInfo = true }
-        if controlsHidden || selected == .close { selected = .play }
+        if controlsHidden { selected = .play }
         scheduleHide()
     }
     private func flashControls() {

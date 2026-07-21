@@ -42,8 +42,7 @@ struct DiscoverView: View {
 
                     LazyVGrid(columns: columns, spacing: 40) {
                         ForEach(items) { item in
-                            NavigationLink(value: item) { PosterCard(item: item, width: 200) }
-                                .buttonStyle(.card)
+                            PosterCard(item: item, width: 200)
                         }
                     }
                     .padding(.horizontal, 60)

@@ -7,7 +7,7 @@ final class AuthStore: ObservableObject {
     @Published var authKey: String?
     @Published var email: String?
     @Published var addons: [Addon] = []
-    @Published var continueWatching: [MetaItem] = []
+    @Published var continueWatching: [CwItem] = []
 
     private let keyAuth = "harbor.stremio.authKey"
     private let keyEmail = "harbor.stremio.email"
@@ -21,7 +21,7 @@ final class AuthStore: ObservableObject {
     func loadContinueWatching() async {
         guard let authKey else { return }
         let cw = await StremioService.continueWatching(authKey: authKey)
-        continueWatching = cw.map { $0.asMeta }
+        continueWatching = cw.map { $0.asCwItem }
     }
 
     var isSignedIn: Bool { authKey != nil }

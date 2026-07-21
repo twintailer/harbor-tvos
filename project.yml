@@ -20,7 +20,10 @@ targets:
       - path: Assets.xcassets
     dependencies:
       - package: MPVKit
-        product: MPVKit
+        # GPL variant — the one StremioX ships on real Apple TVs. The plain MPVKit
+        # product's tvOS slice initialized NO audio output at all ("AO —" on device);
+        # with -GPL the default driver chain works.
+        product: MPVKit-GPL
     info:
       path: Info.plist
       properties:

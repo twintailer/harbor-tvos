@@ -7,6 +7,9 @@ final class PlayerModel: ObservableObject {
     @Published var duration: Double = 0
     @Published var paused: Bool = false
     @Published var ready: Bool = false
+    /// Last mpv warn/error log lines, shown in the in-player Debug panel so playback
+    /// problems can be read directly on the Apple TV (no Mac needed).
+    @Published var logLines: [String] = []
 
     weak var controller: MPVViewController?
 

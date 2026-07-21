@@ -107,6 +107,13 @@ struct DetailView: View {
             if full == nil {
                 full = await AddonService.meta(addons: auth.addons, type: item.type, id: item.id)
             }
+            // A user meta addon may serve rich text/art but no episode list. Series need
+            // episodes to be playable, so backfill videos from Cinemeta when they're missing.
+            if item.type == "series", (full?.videos ?? []).isEmpty,
+               let cine = await CatalogService.meta(type: item.type, id: item.id),
+               let vids = cine.videos, !vids.isEmpty {
+                full = (full ?? cine).withVideos(vids)
+            }
             if item.type == "series", auth.isSignedIn, let key = auth.authKey {
                 libItem = await StremioService.libraryItem(authKey: key, id: item.id)
             }
@@ -213,8 +220,11 @@ struct SeriesEpisodes: View {
                 }
             }
 
-            LazyVStack(alignment: .leading, spacing: 6) {
-                ForEach(Array(episodesInSeason.enumerated()), id: \.offset) { _, v in
+            // Plain VStack, NOT LazyVStack: the tvOS focus engine can only move to views
+            // that exist, and lazy rows below the fold are never instantiated — which made
+            // the episode list unreachable ("can't go down"). Capped for render cost.
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(Array(episodesInSeason.prefix(60).enumerated()), id: \.offset) { _, v in
                     EpisodeRowTV(meta: meta, video: v, progress: watched(v)) { onPlay(v) }
                 }
                 if episodesInSeason.isEmpty {

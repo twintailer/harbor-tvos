@@ -1,5 +1,6 @@
 import SwiftUI
 import Libmpv
+import AVFoundation
 import os
 
 // libmpv-backed player for tvOS. AVPlayer can't decode MKV / most Stremio
@@ -57,10 +58,14 @@ final class MPVViewController: UIViewController {
         view.layer.addSublayer(layer)
         metalLayer = layer
 
-        // mpv is created + initialized ON THE MAIN THREAD. This is the real "no sound" fix:
-        // when init ran on a background queue, video (Metal) rendered but mpv's audio unit
-        // never produced output on Apple TV. The proven StremioX tvOS player inits on main and
-        // touches neither AVAudioSession nor `ao` — mpv's default output routes HDMI correctly.
+        // Activate the playback session BEFORE mpv probes its audio output — on the main
+        // thread, so the driver init finds a ready session.
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, mode: .moviePlayback)
+        try? session.setActive(true)
+
+        // mpv is created + initialized ON THE MAIN THREAD (background-queue init rendered
+        // video but produced no audio-unit output on Apple TV).
         setupMPV()
 
         poll = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
@@ -132,11 +137,10 @@ final class MPVViewController: UIViewController {
         setOpt("gpu-context", "moltenvk")
         setOpt("hwdec", "videotoolbox")
         setOpt("video-rotate", "no")
-        // Audio output: try Apple's AVSampleBufferAudioRenderer driver first — it is the
-        // sanctioned tvOS path and manages the audio session itself. Fall back through the
-        // other Apple drivers if this MPVKit build lacks it. (Default driver order produced
-        // silence on Apple TV even though the same defaults play on iPhone.)
-        setOpt("ao", "avfoundation,coreaudio,audiounit")
+        // No `ao` override: with the MPVKit-GPL build the DEFAULT driver chain is the
+        // proven-on-Apple-TV configuration (StremioX ships exactly this). Explicit lists
+        // were only ever attempted against the non-GPL build, whose tvOS slice never
+        // initialized any audio output at all.
         // Subtitles: match OS language, auto-load, embedded fonts.
         setOpt("subs-match-os-language", "yes")
         setOpt("subs-fallback", "yes")
@@ -181,7 +185,17 @@ final class MPVViewController: UIViewController {
                     if let msg = UnsafeMutablePointer<mpv_event_log_message>(OpaquePointer(event.pointee.data)) {
                         let prefix = String(cString: msg.pointee.prefix)
                         let text = String(cString: msg.pointee.text).trimmingCharacters(in: .newlines)
-                        if !text.isEmpty { self.log.warning("[\(prefix, privacy: .public)] \(text, privacy: .public)") }
+                        if !text.isEmpty {
+                            self.log.warning("[\(prefix, privacy: .public)] \(text, privacy: .public)")
+                            // Also surface in the in-player debug panel, so a problem on the
+                            // Apple TV can be read (and screenshotted) without a Mac.
+                            let line = "[\(prefix)] \(text)"
+                            DispatchQueue.main.async { [weak self] in
+                                guard let m = self?.model else { return }
+                                m.logLines.append(line)
+                                if m.logLines.count > 40 { m.logLines.removeFirst(m.logLines.count - 40) }
+                            }
+                        }
                     }
                 case MPV_EVENT_END_FILE:
                     if let data = event.pointee.data {
@@ -290,6 +304,9 @@ final class MPVViewController: UIViewController {
         mpv_set_wakeup_callback(ctx, nil, nil)
         mpv_command_string(ctx, "quit")
         mpv = nil
-        mpvQueue.async { mpv_terminate_destroy(ctx) }
+        mpvQueue.async {
+            mpv_terminate_destroy(ctx)
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
     }
 }

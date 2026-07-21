@@ -49,7 +49,7 @@ struct PlayerView: View {
     @AppStorage(SubtitleStyle.Key.seekStep) private var seekStep = 10
 
     private enum Control: Hashable { case scrub, restart, back, play, fwd, audio, subs, aspect, speed }
-    private enum PanelKind { case audio, subtitles, subtitleSettings, aspect, speed }
+    private enum PanelKind { case audio, subtitles, subtitleSettings, aspect, speed, debug }
     @State private var selected: Control = .play
     @State private var lastButton: Control = .play
     @State private var speed: Double = 1.0
@@ -93,7 +93,11 @@ struct PlayerView: View {
         if showOptions {
             switch type {
             case .menu:
-                if panelKind == .subtitleSettings { openPanel(.subtitles) } else { closePanel() }
+                switch panelKind {
+                case .subtitleSettings: openPanel(.subtitles)
+                case .debug: openPanel(.aspect)
+                default: closePanel()
+                }
             case .upArrow: moveOption(-1)
             case .downArrow: moveOption(1)
             case .select: activateOption()
@@ -308,7 +312,16 @@ struct PlayerView: View {
                 OptionRow(label: "Fit  ·  default", isSelected: mode == "original") { model.controller?.setVideoSize("original") },
                 OptionRow(label: "Fill  ·  crop to screen", isSelected: mode == "fill" || mode == "zoom") { model.controller?.setVideoSize("fill") },
                 OptionRow(label: "Stretch  ·  fill, distort", isSelected: mode == "stretch") { model.controller?.setVideoSize("stretch") },
+                OptionRow(label: "Debug info", detail: "›") { openPanel(.debug) },
             ]
+        case .debug:
+            var rows = [OptionRow(label: "Audio output: \(audioOut.isEmpty ? "none" : audioOut)", isHeader: true)]
+            if model.logLines.isEmpty {
+                rows.append(OptionRow(label: "No warnings logged."))
+            } else {
+                rows += model.logLines.suffix(24).map { OptionRow(label: $0) }
+            }
+            return rows
         case .speed:
             return speeds.map { s in
                 OptionRow(label: s == 1.0 ? "Normal" : String(format: "%gx", s), isSelected: abs(speed - s) < 0.01) {
@@ -349,6 +362,7 @@ struct PlayerView: View {
         case .subtitleSettings: return "Subtitle Settings"
         case .aspect: return "Aspect Ratio"
         case .speed: return "Playback Speed"
+        case .debug: return "Debug"
         }
     }
 

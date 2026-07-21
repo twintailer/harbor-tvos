@@ -108,7 +108,7 @@ struct DetailView: View {
                 full = await AddonService.meta(addons: auth.addons, type: item.type, id: item.id)
             }
             if item.type == "series", auth.isSignedIn, let key = auth.authKey {
-                libItem = await AddonService.libraryItem(authKey: key, id: item.id)
+                libItem = await StremioService.libraryItem(authKey: key, id: item.id)
             }
         }
     }

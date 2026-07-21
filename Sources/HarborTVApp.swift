@@ -27,6 +27,8 @@ struct RootView: View {
                 .tabItem { Label("Search", systemImage: "magnifyingglass") }
             ProfileView()
                 .tabItem { Label("Account", systemImage: "person.crop.circle") }
+            SettingsView()
+                .tabItem { Label("Settings", systemImage: "gearshape") }
         }
     }
 }

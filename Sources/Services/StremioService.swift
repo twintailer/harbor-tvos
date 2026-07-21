@@ -56,24 +56,29 @@ struct Addon: Codable {
         let resources: [Resource]?
         let types: [String]?
         let catalogs: [CatalogDef]?
+        let idPrefixes: [String]?
     }
     struct CatalogDef: Codable, Hashable {
         let type: String
         let id: String
         let name: String?
     }
-    // resources can be plain strings ("stream") or objects ({name:"stream"}).
+    // resources can be plain strings ("stream") or objects ({name:"stream", types, idPrefixes}).
     struct Resource: Codable {
         let name: String
+        let types: [String]?
+        let idPrefixes: [String]?
         init(from decoder: Decoder) throws {
             if let s = try? decoder.singleValueContainer().decode(String.self) {
-                name = s
+                name = s; types = nil; idPrefixes = nil
             } else {
                 let c = try decoder.container(keyedBy: CodingKeys.self)
                 name = try c.decode(String.self, forKey: .name)
+                types = try? c.decode([String].self, forKey: .types)
+                idPrefixes = try? c.decode([String].self, forKey: .idPrefixes)
             }
         }
-        enum CodingKeys: String, CodingKey { case name }
+        enum CodingKeys: String, CodingKey { case name, types, idPrefixes }
     }
 
     var base: String {
@@ -83,6 +88,19 @@ struct Addon: Codable {
     var hasMeta: Bool { hasResource("meta") }
     func hasResource(_ r: String) -> Bool {
         (manifest?.resources ?? []).contains { $0.name == r }
+    }
+    // id-prefixes this addon serves for meta (resource-level first, else manifest-level).
+    var metaIdPrefixes: [String] {
+        ((manifest?.resources ?? []).first { $0.name == "meta" }?.idPrefixes)
+            ?? manifest?.idPrefixes ?? []
+    }
+    /// Does this addon claim to serve meta for `id` of `type`? A matching id-prefix is a strong
+    /// signal; when the addon lists no prefixes, fall back to a type match.
+    func servesMeta(type: String, id: String) -> Bool {
+        guard hasMeta else { return false }
+        let prefixes = metaIdPrefixes
+        if !prefixes.isEmpty { return prefixes.contains { id.hasPrefix($0) } }
+        return manifest?.types?.contains(type) ?? true
     }
 }
 

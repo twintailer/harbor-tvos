@@ -46,10 +46,16 @@ enum AddonService {
         } catch { return [] }
     }
 
-    // Prefer a user meta-addon that serves this type; fall back to Cinemeta.
+    // Prefer a user meta-addon that actually serves this id (matching id-prefix), then any other
+    // meta addon, then Cinemeta. This is what makes the user's own metadata addon win over Cinemeta.
     static func meta(addons: [Addon], type: String, id: String) async -> MetaItem? {
-        let metaAddons = addons.filter { $0.hasMeta && ($0.manifest?.types?.contains(type) ?? true) }
-        for addon in metaAddons {
+        let matching = addons.filter { $0.servesMeta(type: type, id: id) }
+        let matchingBases = Set(matching.map { $0.base })
+        let otherMeta = addons.filter { $0.hasMeta && !matchingBases.contains($0.base) }
+        for addon in matching {
+            if let m = await metaFrom(base: addon.base, type: type, id: id) { return m }
+        }
+        for addon in otherMeta {
             if let m = await metaFrom(base: addon.base, type: type, id: id) { return m }
         }
         return await metaFrom(base: CatalogService.cinemeta, type: type, id: id)
@@ -84,12 +90,17 @@ extension StremioService {
             let flaggedWatched: Int?
             let lastWatched: String?
         }
+        // Matches Stremio's Continue Watching: keep anything you've actually started. For a SERIES,
+        // keep it even when the current episode is finished (the *next* episode is what you continue);
+        // only a finished MOVIE is dropped.
         var isContinueWatching: Bool {
             if (removed ?? false) && !(temp ?? false) { return false }
             guard let s = state else { return false }
-            if (s.flaggedWatched ?? 0) > 0 { return false }
-            guard let off = s.timeOffset, off > 0 else { return false }
-            if let d = s.duration, d > 0, off / d >= 0.9 { return false }
+            let watched = (s.timeOffset ?? 0) > 0 || !(s.lastWatched ?? "").isEmpty
+            guard watched else { return false }
+            if type == "movie", let off = s.timeOffset, let d = s.duration, d > 0, off / d >= 0.95 {
+                return false
+            }
             return true
         }
         var asMeta: MetaItem {
@@ -100,14 +111,12 @@ extension StremioService {
     }
 
     static func continueWatching(authKey: String) async -> [LibraryItem] {
-        // datastoreMeta returns [[id, hash], …]
-        guard let ids: [[String]] = try? await postArray(
-            "datastoreMeta", ["authKey": authKey, "collection": "libraryItem"]),
-            !ids.isEmpty else { return [] }
-        let idList = ids.compactMap { $0.first }
+        // datastoreGet with all:true returns every library item in `result`. (The old two-step
+        // datastoreMeta → datastoreGet path decoded the meta array as [[String]], but its second
+        // element is a numeric mtime, so it threw and Continue Watching came back empty.)
         guard let items: [LibraryItem] = try? await postArray(
             "datastoreGet",
-            ["authKey": authKey, "collection": "libraryItem", "ids": idList, "all": true])
+            ["authKey": authKey, "collection": "libraryItem", "ids": [], "all": true])
         else { return [] }
         return items
             .filter { $0.isContinueWatching }

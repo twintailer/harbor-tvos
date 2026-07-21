@@ -39,12 +39,21 @@ struct PlayerView: View {
 
     @AppStorage(SubtitleStyle.Key.size) private var subSize = SubtitleStyle.defaultSize
     @AppStorage(SubtitleStyle.Key.color) private var subColor = SubtitleStyle.defaultColor
-    @AppStorage(SubtitleStyle.Key.background) private var subBackground = SubtitleStyle.defaultBackground
+    @AppStorage(SubtitleStyle.Key.style) private var subStyle = SubtitleStyle.defaultStyle
+    @AppStorage(SubtitleStyle.Key.bold) private var subBold = false
+    @AppStorage(SubtitleStyle.Key.subLang) private var prefSubLang = ""
+    @AppStorage(SubtitleStyle.Key.audioLang) private var prefAudioLang = ""
+    @AppStorage(SubtitleStyle.Key.subsOff) private var subsOffByDefault = false
+    @AppStorage(SubtitleStyle.Key.defaultSpeed) private var defaultSpeed = 1.0
+    @AppStorage(SubtitleStyle.Key.seekStep) private var seekStep = 10
 
-    private enum Control: Hashable { case close, scrub, restart, back, play, fwd, audio, subs, aspect }
-    private enum PanelKind { case audio, subtitles, subtitleSettings, aspect }
+    private enum Control: Hashable { case close, scrub, restart, back, play, fwd, audio, subs, aspect, speed }
+    private enum PanelKind { case audio, subtitles, subtitleSettings, aspect, speed }
     @State private var selected: Control = .play
     @State private var lastButton: Control = .play
+    @State private var speed: Double = 1.0
+
+    private let speeds: [Double] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
 
     private var controlsHidden: Bool { !showInfo && !showOptions }
 
@@ -118,6 +127,7 @@ struct PlayerView: View {
         if !audioTracks.isEmpty { c.append(.audio) }
         c.append(.subs)
         c.append(.aspect)
+        c.append(.speed)
         return c
     }
 
@@ -149,12 +159,13 @@ struct PlayerView: View {
         case .close:   dismiss()
         case .scrub:   scrubbing ? commitScrub() : toggle()
         case .restart: restart()
-        case .back:    seek(-10)
-        case .fwd:     seek(10)
+        case .back:    seek(-Double(seekStep))
+        case .fwd:     seek(Double(seekStep))
         case .play:    toggle()
         case .audio:   openPanel(.audio)
         case .subs:    openPanel(.subtitles)
         case .aspect:  openPanel(.aspect)
+        case .speed:   openPanel(.speed)
         }
     }
 
@@ -205,12 +216,13 @@ struct PlayerView: View {
                 }
                 HStack(spacing: 20) {
                     ctrlButton(.restart, "arrow.counterclockwise")
-                    ctrlButton(.back, "gobackward.10")
+                    ctrlButton(.back, "gobackward.\(seekStep)")
                     ctrlButton(.play, model.paused ? "play.fill" : "pause.fill", big: true)
-                    ctrlButton(.fwd, "goforward.10")
+                    ctrlButton(.fwd, "goforward.\(seekStep)")
                     if !audioTracks.isEmpty { ctrlButton(.audio, "waveform") }
                     ctrlButton(.subs, "captions.bubble")
                     ctrlButton(.aspect, "aspectratio")
+                    ctrlButton(.speed, "speedometer")
                 }
             }
             .padding(.horizontal, 60).padding(.bottom, 50)
@@ -278,8 +290,9 @@ struct PlayerView: View {
             for s in SubtitleStyle.sizes { rows.append(OptionRow(label: s.label, isSelected: subSize == s.id) { subSize = s.id; model.controller?.applySubtitleStyle() }) }
             rows.append(OptionRow(label: "Colour", isHeader: true))
             for c in SubtitleStyle.colors { rows.append(OptionRow(label: c.label, isSelected: subColor == c.id) { subColor = c.id; model.controller?.applySubtitleStyle() }) }
-            rows.append(OptionRow(label: "Background", isHeader: true))
-            for b in SubtitleStyle.backgrounds { rows.append(OptionRow(label: b.label, isSelected: subBackground == b.id) { subBackground = b.id; model.controller?.applySubtitleStyle() }) }
+            rows.append(OptionRow(label: "Style", isHeader: true))
+            for s in SubtitleStyle.styles { rows.append(OptionRow(label: s.label, isSelected: subStyle == s.id) { subStyle = s.id; model.controller?.applySubtitleStyle() }) }
+            rows.append(OptionRow(label: "Bold", detail: subBold ? "On" : "Off", isSelected: subBold) { subBold.toggle(); model.controller?.applySubtitleStyle() })
             return rows
         case .aspect:
             let mode = model.controller?.videoSizeMode ?? "original"
@@ -288,6 +301,12 @@ struct PlayerView: View {
                 OptionRow(label: "Fill  ·  crop to screen", isSelected: mode == "fill" || mode == "zoom") { model.controller?.setVideoSize("fill") },
                 OptionRow(label: "Stretch  ·  fill, distort", isSelected: mode == "stretch") { model.controller?.setVideoSize("stretch") },
             ]
+        case .speed:
+            return speeds.map { s in
+                OptionRow(label: s == 1.0 ? "Normal" : String(format: "%gx", s), isSelected: abs(speed - s) < 0.01) {
+                    speed = s; model.controller?.setSpeed(s)
+                }
+            }
         }
     }
 
@@ -321,6 +340,7 @@ struct PlayerView: View {
         case .subtitles: return "Subtitles"
         case .subtitleSettings: return "Subtitle Settings"
         case .aspect: return "Aspect Ratio"
+        case .speed: return "Playback Speed"
         }
     }
 
@@ -413,13 +433,30 @@ struct PlayerView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { refreshTracks() }
     }
 
-    /// Once the file is playing, pick the tracks & metadata once (tracks aren't known until decode starts).
+    /// Once the file is playing, apply default speed + preferred audio/subtitle language once
+    /// (tracks aren't known until decode starts).
     private func maybeAutoSelectTracks() {
         guard model.ready, !appliedAutoTracks else { return }
         if Date().timeIntervalSince(lastTrackRefresh) < 0.5 { return }
         lastTrackRefresh = Date()
         refreshTracks()
-        if !(audioTracks.isEmpty && subtitleTracks.isEmpty) { appliedAutoTracks = true }
+        guard !(audioTracks.isEmpty && subtitleTracks.isEmpty) else { return }
+        appliedAutoTracks = true
+
+        // Default playback speed.
+        if abs(defaultSpeed - 1.0) > 0.01 { speed = defaultSpeed; model.controller?.setSpeed(defaultSpeed) }
+
+        // Preferred audio language.
+        if !prefAudioLang.isEmpty, let a = audioTracks.first(where: { $0.lang.lowercased().hasPrefix(prefAudioLang) }) {
+            model.controller?.setAudioTrack(a.id)
+        }
+        // Subtitles: off by default, or preferred language.
+        if subsOffByDefault {
+            model.controller?.setSubtitleTrack(-1)
+        } else if !prefSubLang.isEmpty, let s = subtitleTracks.first(where: { $0.lang.lowercased().hasPrefix(prefSubLang) }) {
+            model.controller?.setSubtitleTrack(s.id)
+        }
+        refreshTracksSoon()
     }
 
     // MARK: - Playback helpers

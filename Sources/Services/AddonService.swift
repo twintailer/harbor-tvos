@@ -89,19 +89,23 @@ extension StremioService {
             let episode: Int?
             let flaggedWatched: Int?
             let lastWatched: String?
+            let video_id: String?
         }
-        // Matches Stremio's Continue Watching: keep anything you've actually started. For a SERIES,
-        // keep it even when the current episode is finished (the *next* episode is what you continue);
-        // only a finished MOVIE is dropped.
+        // Exact parity with Harbor's stremio.ts `isCwMember`: a positive timeOffset means it's a
+        // member; a flaggedWatched item with no offset is finished and drops out. (The previous
+        // `|| lastWatched not empty` check was wrong — it kept every ever-watched title forever,
+        // which is why finished items lingered in Continue Watching.)
         var isContinueWatching: Bool {
             if (removed ?? false) && !(temp ?? false) { return false }
             guard let s = state else { return false }
-            let watched = (s.timeOffset ?? 0) > 0 || !(s.lastWatched ?? "").isEmpty
-            guard watched else { return false }
-            if type == "movie", let off = s.timeOffset, let d = s.duration, d > 0, off / d >= 0.95 {
-                return false
-            }
-            return true
+            if (s.timeOffset ?? 0) > 0 { return true }
+            if (s.flaggedWatched ?? 0) > 0 { return false }
+            return false
+        }
+        /// 0…1 watched fraction for the progress bar.
+        var progressRatio: Double {
+            guard let off = state?.timeOffset, let d = state?.duration, d > 0 else { return 0 }
+            return min(1, max(0, off / d))
         }
         var asMeta: MetaItem {
             MetaItem(id: _id, type: type ?? "movie", name: name ?? _id,
@@ -121,6 +125,15 @@ extension StremioService {
         return items
             .filter { $0.isContinueWatching }
             .sorted { ($0.state?.lastWatched ?? "") > ($1.state?.lastWatched ?? "") }
+    }
+
+    /// One library item (for a series detail page: current episode + progress). all:false = just this id.
+    static func libraryItem(authKey: String, id: String) async -> LibraryItem? {
+        guard let items: [LibraryItem] = try? await postArray(
+            "datastoreGet",
+            ["authKey": authKey, "collection": "libraryItem", "ids": [id], "all": false])
+        else { return nil }
+        return items.first { $0._id == id }
     }
 
     // datastore endpoints return a bare array in `result`.

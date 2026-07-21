@@ -55,11 +55,11 @@ final class MPVViewController: UIViewController {
         view.layer.addSublayer(layer)
         metalLayer = layer
 
-        // NOTE: no manual AVAudioSession + no `ao=audiounit`. On tvOS, forcing the
-        // audio unit routed nothing to HDMI (the "no sound" bug). mpv's default
-        // coreaudio output manages the session itself and outputs correctly — this
-        // matches the proven StremioX tvOS player, which touches neither.
-        mpvQueue.async { [weak self] in self?.setupMPV() }
+        // mpv is created + initialized ON THE MAIN THREAD. This is the real "no sound" fix:
+        // when init ran on a background queue, video (Metal) rendered but mpv's audio unit
+        // never produced output on Apple TV. The proven StremioX tvOS player inits on main and
+        // touches neither AVAudioSession nor `ao` — mpv's default output routes HDMI correctly.
+        setupMPV()
 
         poll = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
             self?.tick()
@@ -141,6 +141,9 @@ final class MPVViewController: UIViewController {
                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1")
         setOpt("network-timeout", "30")
         setOpt("stream-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_delay_max=7")
+        if UserDefaults.standard.bool(forKey: SubtitleStyle.Key.audioNormalize) {
+            setOpt("af", "dynaudnorm")   // loudness normalization (quiet dialogue / loud action)
+        }
         setOpt("cache", "yes")
         setOpt("demuxer-readahead-secs", "300")
         setOpt("demuxer-max-bytes", "512MiB")

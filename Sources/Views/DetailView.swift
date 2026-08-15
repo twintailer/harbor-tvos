@@ -331,21 +331,30 @@ struct SeriesEpisodes: View {
     let watched: (MetaItem.Video) -> EpisodeProgress
     let onPlay: (MetaItem.Video) -> Void
 
-    @AppStorage(SubtitleStyle.Key.episodeSort) private var episodeSort = "oldest"
+    @AppStorage(SubtitleStyle.Key.episodeSort) private var episodeSort = "aired"
     @AppStorage(SubtitleStyle.Key.episodeLayout) private var episodeLayout = "list"
     @AppStorage(SubtitleStyle.Key.hideWatched) private var hideWatched = false
     @AppStorage(SubtitleStyle.Key.hideUnreleased) private var hideUnreleased = false
 
     private var seasons: [Int] { Array(Set(videos.compactMap { $0.season })).sorted() }
     private var episodesInSeason: [MetaItem.Video] {
-        let sorted = videos.filter {
-            guard ($0.season ?? 1) == selectedSeason else { return false }
+        let candidates = videos.filter {
+            if episodeSort != "absolute", ($0.season ?? 1) != selectedSeason { return false }
+            if episodeSort == "absolute", ($0.season ?? 0) <= 0 { return false }
             if hideWatched && watched($0).watched { return false }
             if hideUnreleased, let date = releaseDate($0.released), date > Date() { return false }
             return true
         }
-            .sorted { ($0.episode ?? 0) < ($1.episode ?? 0) }
+        let sorted = candidates.sorted(by: airedBefore)
         return episodeSort == "newest" ? Array(sorted.reversed()) : sorted
+    }
+
+    private var orderTitle: String {
+        switch episodeSort {
+        case "absolute": return "Absolute"
+        case "newest": return "Newest"
+        default: return "Aired"
+        }
     }
 
     var body: some View {
@@ -353,7 +362,7 @@ struct SeriesEpisodes: View {
             HStack {
                 Text("Episodes").font(.system(size: 34, weight: .bold))
                 Spacer()
-                if seasons.count > 1 {
+                if seasons.count > 1, episodeSort != "absolute" {
                     Menu {
                         ForEach(seasons, id: \.self) { s in
                             Button("Season \(s)") { selectedSeason = s }
@@ -366,6 +375,17 @@ struct SeriesEpisodes: View {
                         .font(.system(size: 24, weight: .semibold))
                     }
                 }
+                Menu {
+                    Button("Aired order") { episodeSort = "aired" }
+                    Button("Absolute order") { episodeSort = "absolute" }
+                    Button("Newest first") { episodeSort = "newest" }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "arrow.up.arrow.down")
+                        Text(orderTitle)
+                    }
+                    .font(.system(size: 22, weight: .semibold))
+                }
             }
 
             // Plain VStack, NOT LazyVStack: the tvOS focus engine can only move to views
@@ -374,7 +394,7 @@ struct SeriesEpisodes: View {
             if episodeLayout == "strip" {
                 ScrollView(.horizontal) {
                     LazyHStack(alignment: .top, spacing: 28) {
-                        ForEach(Array(episodesInSeason.prefix(60).enumerated()), id: \.offset) { _, video in
+                        ForEach(Array(episodesInSeason.prefix(200).enumerated()), id: \.offset) { _, video in
                             EpisodeStripCard(video: video, progress: watched(video)) { onPlay(video) }
                         }
                     }
@@ -382,13 +402,13 @@ struct SeriesEpisodes: View {
                 }
             } else {
                 VStack(alignment: .leading, spacing: 6) {
-                    ForEach(Array(episodesInSeason.prefix(60).enumerated()), id: \.offset) { _, v in
+                    ForEach(Array(episodesInSeason.prefix(200).enumerated()), id: \.offset) { _, v in
                         EpisodeRowTV(meta: meta, video: v, progress: watched(v)) { onPlay(v) }
                     }
                 }
             }
             if episodesInSeason.isEmpty {
-                Text("No episodes listed for this season.")
+                Text(episodeSort == "absolute" ? "No episodes available in absolute order." : "No episodes listed for this season.")
                     .font(.system(size: 20)).foregroundStyle(.white.opacity(0.5))
             }
         }
@@ -400,6 +420,13 @@ struct SeriesEpisodes: View {
         if let date = ISO8601DateFormatter().date(from: raw) { return date }
         let parser = DateFormatter(); parser.locale = Locale(identifier: "en_US_POSIX"); parser.dateFormat = "yyyy-MM-dd"
         return parser.date(from: String(raw.prefix(10)))
+    }
+
+    private func airedBefore(_ lhs: MetaItem.Video, _ rhs: MetaItem.Video) -> Bool {
+        if let l = releaseDate(lhs.released), let r = releaseDate(rhs.released), l != r { return l < r }
+        let ls = lhs.season ?? 0, rs = rhs.season ?? 0
+        if ls != rs { return ls < rs }
+        return (lhs.episode ?? 0) < (rhs.episode ?? 0)
     }
 }
 

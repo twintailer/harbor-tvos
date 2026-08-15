@@ -163,7 +163,7 @@ private struct AccountPanel: View {
 
 private struct LibraryPanel: View {
     @AppStorage(SubtitleStyle.Key.episodeLayout) private var episodeLayout = "list"
-    @AppStorage(SubtitleStyle.Key.episodeSort) private var episodeSort = "oldest"
+    @AppStorage(SubtitleStyle.Key.episodeSort) private var episodeSort = "aired"
     @AppStorage(SubtitleStyle.Key.showEpisodeDesc) private var showEpisodeDesc = true
     @AppStorage(SubtitleStyle.Key.hideWatched) private var hideWatched = false
     @AppStorage(SubtitleStyle.Key.hideUnreleased) private var hideUnreleased = false
@@ -194,9 +194,11 @@ private struct LibraryPanel: View {
                     Text("Strip").tag("strip")
                 }
                 Picker("Episode order", selection: $episodeSort) {
-                    Text("Oldest first").tag("oldest")
+                    Text("Aired order").tag("aired")
+                    Text("Absolute order").tag("absolute")
                     Text("Newest first").tag("newest")
                 }
+                SettingsHint("Absolute order combines every regular season into one continuous release sequence.")
                 Toggle("Show episode descriptions", isOn: $showEpisodeDesc)
             }
             Section("Spoilers") {
@@ -470,15 +472,20 @@ private struct LanguagesPanel: View {
     @AppStorage(SubtitleStyle.Key.subLang) private var subLang = ""
     @AppStorage(SubtitleStyle.Key.subsOff) private var subsOff = false
     @AppStorage(SubtitleStyle.Key.preferEmbedded) private var preferEmbedded = false
-    @AppStorage(SubtitleStyle.Key.size) private var subSize = SubtitleStyle.defaultSize
-    @AppStorage(SubtitleStyle.Key.color) private var subColor = SubtitleStyle.defaultColor
     @AppStorage(SubtitleStyle.Key.style) private var subStyle = SubtitleStyle.defaultStyle
     @AppStorage(SubtitleStyle.Key.bold) private var subBold = false
     @AppStorage(SubtitleStyle.Key.borderSize) private var borderSize = 2.0
     @AppStorage(SubtitleStyle.Key.margin) private var margin = 12.0
     @AppStorage(SubtitleStyle.Key.opacity) private var opacity = 1.0
     @AppStorage(SubtitleStyle.Key.alignment) private var alignment = "center"
-    @AppStorage(SubtitleStyle.Key.font) private var font = "sans"
+    @AppStorage(SubtitleStyle.Key.font) private var font = "inter"
+    @AppStorage(SubtitleStyle.Key.fontSize) private var fontSize = SubtitleStyle.defaultFontSize
+    @AppStorage(SubtitleStyle.Key.fontColor) private var fontColor = SubtitleStyle.defaultFontColor
+    @AppStorage(SubtitleStyle.Key.borderColor) private var borderColor = SubtitleStyle.defaultBorderColor
+    @AppStorage(SubtitleStyle.Key.boxColor) private var boxColor = SubtitleStyle.defaultBoxColor
+    @AppStorage(SubtitleStyle.Key.boxOpacity) private var boxOpacity = 0.6
+    @AppStorage(SubtitleStyle.Key.assOverride) private var assOverride = "no"
+    @AppStorage(SubtitleStyle.Key.lineSpacing) private var lineSpacing = 0.0
 
     var body: some View {
         List {
@@ -493,39 +500,85 @@ private struct LanguagesPanel: View {
                 Toggle("Prefer embedded subtitles", isOn: $preferEmbedded)
             }
             Section("Subtitle style") {
-                Picker("Size", selection: $subSize) {
-                    ForEach(SubtitleStyle.sizes) { Text($0.label).tag($0.id) }
-                }
-                Picker("Text color", selection: $subColor) {
-                    ForEach(SubtitleStyle.colors) { Text($0.label).tag($0.id) }
-                }
-                Picker("Style", selection: $subStyle) {
+                Picker("Background", selection: $subStyle) {
                     ForEach(SubtitleStyle.styles) { Text($0.label).tag($0.id) }
                 }
+                Picker("Styled (ASS) subtitles", selection: $assOverride) {
+                    ForEach(SubtitleStyle.assOverrides) { Text($0.label).tag($0.id) }
+                }
+                if subStyle == "box" {
+                    Picker("Background opacity", selection: $boxOpacity) {
+                        ForEach(SubtitleStyle.opacities, id: \.self) { value in
+                            Text("\(Int(value * 100))%").tag(value)
+                        }
+                    }
+                }
+                if subStyle == "outline" {
+                    Picker("Outline thickness", selection: $borderSize) {
+                        ForEach(SubtitleStyle.outlineSizes.dropFirst(), id: \.self) { value in
+                            Text(String(format: "%.0f px", value)).tag(value)
+                        }
+                    }
+                }
                 Picker("Font", selection: $font) {
-                    Text("Sans serif").tag("sans")
-                    Text("Serif").tag("serif")
+                    ForEach(SubtitleStyle.fonts) { Text($0.label).tag($0.id) }
+                }
+                Toggle("Bold text", isOn: $subBold)
+                Picker("Size", selection: $fontSize) {
+                    ForEach(SubtitleStyle.fontSizes, id: \.self) { value in
+                        Text(String(format: "%.0f px", value)).tag(value)
+                    }
+                }
+                Picker("Opacity", selection: $opacity) {
+                    ForEach(SubtitleStyle.opacities, id: \.self) { value in
+                        Text("\(Int(value * 100))%").tag(value)
+                    }
+                }
+                Picker("Distance from bottom", selection: $margin) {
+                    ForEach(SubtitleStyle.margins, id: \.self) { value in
+                        Text(String(format: "%.0f%%", value)).tag(value)
+                    }
                 }
                 Picker("Alignment", selection: $alignment) {
                     Text("Left").tag("left")
                     Text("Center").tag("center")
                     Text("Right").tag("right")
                 }
-                Toggle("Bold", isOn: $subBold)
-                Picker("Outline", selection: $borderSize) {
-                    ForEach([0.0, 1.0, 2.0, 3.0, 4.0, 5.0], id: \.self) { value in
-                        Text(String(format: "%.0f", value)).tag(value)
+                Picker("Line spacing", selection: $lineSpacing) {
+                    ForEach(SubtitleStyle.lineSpacings, id: \.self) { value in
+                        Text(String(format: "%+.0f px", value)).tag(value)
                     }
                 }
-                Picker("Distance from bottom", selection: $margin) {
-                    ForEach([0.0, 8.0, 12.0, 20.0, 32.0, 48.0, 64.0, 80.0], id: \.self) { value in
-                        Text(String(format: "%.0f", value)).tag(value)
+            }
+            Section("Subtitle colours") {
+                Picker("Text color", selection: $fontColor) {
+                    ForEach(SubtitleStyle.textColors) { Text($0.label).tag($0.id) }
+                }
+                Picker("Outline color", selection: $borderColor) {
+                    ForEach(SubtitleStyle.edgeColors) { Text($0.label).tag($0.id) }
+                }
+                if subStyle == "box" {
+                    Picker("Box color", selection: $boxColor) {
+                        ForEach(SubtitleStyle.edgeColors) { Text($0.label).tag($0.id) }
                     }
                 }
-                Picker("Opacity", selection: $opacity) {
-                    ForEach([0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0], id: \.self) { value in
-                        Text("\(Int(value * 100))%").tag(value)
-                    }
+            }
+            Section {
+                Button("Reset subtitle appearance", role: .destructive) {
+                    subStyle = SubtitleStyle.defaultStyle
+                    assOverride = "no"
+                    boxOpacity = 0.6
+                    borderSize = 2
+                    font = "inter"
+                    subBold = false
+                    fontSize = SubtitleStyle.defaultFontSize
+                    opacity = 1
+                    margin = 12
+                    alignment = "center"
+                    lineSpacing = 0
+                    fontColor = SubtitleStyle.defaultFontColor
+                    borderColor = SubtitleStyle.defaultBorderColor
+                    boxColor = SubtitleStyle.defaultBoxColor
                 }
             }
         }

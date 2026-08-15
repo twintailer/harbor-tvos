@@ -72,9 +72,7 @@ final class MPVViewController: UIViewController {
 
         // Activate the playback session BEFORE mpv probes its audio output — on the main
         // thread, so the driver init finds a ready session.
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .moviePlayback)
-        try? session.setActive(true)
+        activateAudioSession()
 
         // mpv is created + initialized ON THE MAIN THREAD (background-queue init rendered
         // video but produced no audio-unit output on Apple TV).
@@ -136,6 +134,19 @@ final class MPVViewController: UIViewController {
         mpv_set_property_string(mpv, name, value)
     }
 
+    @discardableResult
+    private func activateAudioSession() -> Bool {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(.playback, mode: .moviePlayback, options: [])
+            try session.setActive(true)
+            return true
+        } catch {
+            log.error("AVAudioSession activation failed: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
     private func setupMPV() {
         guard let layer = metalLayer, let ctx = mpv_create() else { return }
         mpv = ctx
@@ -166,10 +177,10 @@ final class MPVViewController: UIViewController {
         default: setOpt("hwdec", "videotoolbox")
         }
         setOpt("video-rotate", "no")
-        // No `ao` override: with the MPVKit-GPL build the DEFAULT driver chain is the
-        // proven-on-Apple-TV configuration (StremioX ships exactly this). Explicit lists
-        // were only ever attempted against the non-GPL build, whose tvOS slice never
-        // initialized any audio output at all.
+        // MPVKit-GPL's tvOS slice contains the AudioUnit backend. Select it explicitly so
+        // libmpv never settles on the null output while the HDMI route is still starting.
+        setOpt("ao", "audiounit")
+        setOpt("audio-channels", defaults.bool(forKey: SubtitleStyle.Key.mpvDownmix) ? "stereo" : "auto-safe")
         // Subtitles: match OS language, auto-load, embedded fonts.
         setOpt("subs-match-os-language", "yes")
         setOpt("subs-fallback", "yes")
@@ -198,7 +209,14 @@ final class MPVViewController: UIViewController {
             setOpt("demuxer-max-back-bytes", "32MiB")
         }
         setOpt("keep-open", "yes")
-        mpv_initialize(ctx)
+        let initializeResult = mpv_initialize(ctx)
+        guard initializeResult >= 0 else {
+            let message = String(cString: mpv_error_string(initializeResult))
+            log.error("mpv initialization failed: \(message, privacy: .public)")
+            mpv = nil
+            mpv_terminate_destroy(ctx)
+            return
+        }
 
         // Event loop: drain mpv's queue off-main. Captures warnings/errors (incl. audio-output
         // failures) into the unified log and keeps the queue from overflowing.
@@ -297,7 +315,9 @@ final class MPVViewController: UIViewController {
         return result
     }
 
-    func setAudioTrack(_ id: Int) { mpvQueue.async { [weak self] in self?.setString("aid", id < 0 ? "no" : String(id)) } }
+    func setAudioTrack(_ id: Int) {
+        mpvQueue.async { [weak self] in self?.setString("aid", id < 0 ? "no" : String(id)) }
+    }
     func setSubtitleTrack(_ id: Int) { mpvQueue.async { [weak self] in self?.setString("sid", id < 0 ? "no" : String(id)) } }
     func setSpeed(_ speed: Double) { mpvQueue.async { [weak self] in self?.setString("speed", String(format: "%.2f", speed)) } }
     func setSubDelay(_ s: Double) { mpvQueue.async { [weak self] in self?.setString("sub-delay", String(format: "%.2f", s)) } }
@@ -324,6 +344,17 @@ final class MPVViewController: UIViewController {
         return (getInt("video-params/h"),
                 getString("audio-codec-name") ?? "",
                 getString("current-ao") ?? "")
+    }
+
+    /// Re-open the AudioUnit output after a late HDMI/session route. The second-stage stereo
+    /// fallback handles receivers that advertise a surround layout they cannot actually accept.
+    func recoverAudioOutput(forceStereo: Bool) {
+        activateAudioSession()
+        mpvQueue.async { [weak self] in
+            guard let self, self.mpv != nil else { return }
+            if forceStereo { self.setString("audio-channels", "stereo") }
+            self.command(["ao-reload"])
+        }
     }
 
     private(set) var videoSizeMode = UserDefaults.standard.string(forKey: SubtitleStyle.Key.videoSize) ?? "original"

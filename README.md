@@ -36,7 +36,7 @@ The GitHub workflow builds an unsigned tvOS IPA on a macOS runner:
 gh workflow run tvos-build.yml
 ```
 
-Artifact: `harbor-tvos` → `Harbor_tvOS_0.2.0_unsigned.ipa`.
+Artifact: `harbor-tvos` → `Harbor_tvOS_0.2.1_unsigned.ipa`.
 
 For a local build on macOS, install Pillow and XcodeGen, then run
 `python3 scripts/generate-assets.py`, `bash scripts/fetch-anime4k.sh` and

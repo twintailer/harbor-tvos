@@ -28,6 +28,9 @@ struct PlayerView: View {
     @State private var optionRow = 0
     @State private var audioTracks: [MPVTrack] = []
     @State private var subtitleTracks: [MPVTrack] = []
+    @State private var selectedAudioTrackID: Int?
+    @State private var pendingAudioTrackID: Int?
+    @State private var selectedSubtitleTrackID: Int = -1
     @State private var videoHeight = 0
     @State private var audioCodec = ""
     @State private var audioOut = ""
@@ -39,6 +42,10 @@ struct PlayerView: View {
     @State private var lastSavedPosition = 0.0
     @State private var subtitleDelay = 0.0
     @State private var audioDelay = 0.0
+    @State private var readyAt = Date.distantFuture
+    @State private var lastMediaRefresh = Date.distantPast
+    @State private var lastAudioRecovery = Date.distantPast
+    @State private var audioRecoveryStage = 0
 
     // Scrub-to-seek
     @State private var scrubbing = false
@@ -47,10 +54,20 @@ struct PlayerView: View {
     @State private var lastScrubAt = 0.0
     @State private var scrubCommit: Task<Void, Never>?
 
-    @AppStorage(SubtitleStyle.Key.size) private var subSize = SubtitleStyle.defaultSize
-    @AppStorage(SubtitleStyle.Key.color) private var subColor = SubtitleStyle.defaultColor
     @AppStorage(SubtitleStyle.Key.style) private var subStyle = SubtitleStyle.defaultStyle
     @AppStorage(SubtitleStyle.Key.bold) private var subBold = false
+    @AppStorage(SubtitleStyle.Key.borderSize) private var subBorderSize = 2.0
+    @AppStorage(SubtitleStyle.Key.margin) private var subMargin = 12.0
+    @AppStorage(SubtitleStyle.Key.opacity) private var subOpacity = 1.0
+    @AppStorage(SubtitleStyle.Key.alignment) private var subAlignment = "center"
+    @AppStorage(SubtitleStyle.Key.font) private var subFont = "inter"
+    @AppStorage(SubtitleStyle.Key.fontSize) private var subFontSize = SubtitleStyle.defaultFontSize
+    @AppStorage(SubtitleStyle.Key.fontColor) private var subFontColor = SubtitleStyle.defaultFontColor
+    @AppStorage(SubtitleStyle.Key.borderColor) private var subBorderColor = SubtitleStyle.defaultBorderColor
+    @AppStorage(SubtitleStyle.Key.boxColor) private var subBoxColor = SubtitleStyle.defaultBoxColor
+    @AppStorage(SubtitleStyle.Key.boxOpacity) private var subBoxOpacity = 0.6
+    @AppStorage(SubtitleStyle.Key.assOverride) private var subAssOverride = "no"
+    @AppStorage(SubtitleStyle.Key.lineSpacing) private var subLineSpacing = 0.0
     @AppStorage(SubtitleStyle.Key.subLang) private var prefSubLang = ""
     @AppStorage(SubtitleStyle.Key.audioLang) private var prefAudioLang = ""
     @AppStorage(SubtitleStyle.Key.subsOff) private var subsOffByDefault = false
@@ -120,9 +137,15 @@ struct PlayerView: View {
                 .padding(34)
             }
         }
-        .onReceive(model.$ready) { if $0 { refreshTracksSoon() } }
+        .onReceive(model.$ready) {
+            if $0 {
+                if readyAt == .distantFuture { readyAt = Date() }
+                refreshTracksSoon()
+            }
+        }
         .onReceive(model.$position) { position in
             maybeAutoSelectTracks()
+            monitorAudioOutput()
             if model.duration > 0, position > 0, abs(position - lastSavedPosition) >= 30 {
                 lastSavedPosition = position
                 target.onProgress?(position, model.duration)
@@ -257,9 +280,8 @@ struct PlayerView: View {
         return parts.joined(separator: "  ·  ")
     }
 
-    /// Harbor-style bar: ONE block hugging the bottom edge — title + info line,
-    /// then the scrubber, then the transport row (left cluster) and the
-    /// track/format buttons (right cluster).
+    /// Floating Liquid Glass transport surface. On tvOS 26 this uses Apple's native
+    /// refractive glass; older systems receive a material fallback with the same geometry.
     private var controlBar: some View {
         VStack {
             Spacer()
@@ -298,13 +320,16 @@ struct PlayerView: View {
                     }
                 }
             }
-            .padding(.horizontal, 70)
-            .padding(.top, 60)
-            .padding(.bottom, 36)
-            .background(
-                LinearGradient(colors: [.clear, .black.opacity(0.92)],
-                               startPoint: .top, endPoint: .bottom)
-            )
+            .padding(.horizontal, 34)
+            .padding(.vertical, 28)
+            .harborGlass(cornerRadius: 38, tint: Color.black.opacity(0.12))
+            .overlay {
+                RoundedRectangle(cornerRadius: 38, style: .continuous)
+                    .stroke(.white.opacity(0.16), lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.45), radius: 34, y: 18)
+            .padding(.horizontal, 54)
+            .padding(.bottom, 42)
         }
         .ignoresSafeArea()
         .transition(.opacity)
@@ -335,11 +360,14 @@ struct PlayerView: View {
         let d: CGFloat = big ? 92 : 64
         return Image(systemName: icon)
             .font(.system(size: big ? 38 : 26, weight: .semibold))
-            .foregroundStyle(sel ? .black : .white)
+            .foregroundStyle(.white)
             .frame(width: d, height: d)
-            .background(Circle().fill(sel ? accent : Color.white.opacity(0.12)))
-            .scaleEffect(sel ? 1.12 : 1.0)
-            .animation(.easeOut(duration: 0.18), value: sel)
+            .background(Circle().fill(sel ? accent.opacity(0.48) : Color.white.opacity(0.06)))
+            .harborGlass(cornerRadius: d / 2, tint: sel ? accent.opacity(0.28) : nil)
+            .overlay(Circle().stroke(sel ? accent.opacity(0.9) : .white.opacity(0.12), lineWidth: sel ? 2 : 1))
+            .shadow(color: sel ? accent.opacity(0.4) : .clear, radius: 18)
+            .scaleEffect(sel ? 1.13 : 1.0)
+            .animation(.spring(response: 0.28, dampingFraction: 0.72), value: sel)
     }
 
     // MARK: - Options panel
@@ -356,17 +384,18 @@ struct PlayerView: View {
     private var optionRows: [OptionRow] {
         switch panelKind {
         case .audio:
-            var rows = groupedTrackRows(audioTracks) { setAudio($0) }
+            var rows = groupedTrackRows(audioTracks, selectedID: selectedAudioTrackID) { setAudio($0) }
             rows.append(OptionRow(label: "Audio sync", detail: String(format: "%+.1fs", audioDelay), isHeader: true))
             rows.append(OptionRow(label: "Audio 0.1s earlier") { audioDelay -= 0.1; model.controller?.setAudioDelay(audioDelay) })
             rows.append(OptionRow(label: "Reset audio sync") { audioDelay = 0; model.controller?.setAudioDelay(0) })
             rows.append(OptionRow(label: "Audio 0.1s later") { audioDelay += 0.1; model.controller?.setAudioDelay(audioDelay) })
             return rows
         case .subtitles:
-            var rows = [OptionRow(label: "Off", isSelected: subtitleTracks.allSatisfy { !$0.selected }) {
+            var rows = [OptionRow(label: "Off", isSelected: selectedSubtitleTrackID < 0) {
+                selectedSubtitleTrackID = -1
                 model.controller?.setSubtitleTrack(-1); refreshTracksSoon()
             }]
-            rows += groupedTrackRows(subtitleTracks) { setSub($0) }
+            rows += groupedTrackRows(subtitleTracks, selectedID: selectedSubtitleTrackID) { setSub($0) }
             rows.append(OptionRow(label: "Subtitle Settings", detail: "›") { openPanel(.subtitleSettings) })
             rows.append(OptionRow(label: "Subtitle sync", detail: String(format: "%+.1fs", subtitleDelay), isHeader: true))
             rows.append(OptionRow(label: "Subtitles 0.1s earlier") { subtitleDelay -= 0.1; model.controller?.setSubDelay(subtitleDelay) })
@@ -374,13 +403,96 @@ struct PlayerView: View {
             rows.append(OptionRow(label: "Subtitles 0.1s later") { subtitleDelay += 0.1; model.controller?.setSubDelay(subtitleDelay) })
             return rows
         case .subtitleSettings:
-            var rows: [OptionRow] = [OptionRow(label: "Size", isHeader: true)]
-            for s in SubtitleStyle.sizes { rows.append(OptionRow(label: s.label, isSelected: subSize == s.id) { subSize = s.id; model.controller?.applySubtitleStyle() }) }
-            rows.append(OptionRow(label: "Colour", isHeader: true))
-            for c in SubtitleStyle.colors { rows.append(OptionRow(label: c.label, isSelected: subColor == c.id) { subColor = c.id; model.controller?.applySubtitleStyle() }) }
-            rows.append(OptionRow(label: "Style", isHeader: true))
-            for s in SubtitleStyle.styles { rows.append(OptionRow(label: s.label, isSelected: subStyle == s.id) { subStyle = s.id; model.controller?.applySubtitleStyle() }) }
-            rows.append(OptionRow(label: "Bold", detail: subBold ? "On" : "Off", isSelected: subBold) { subBold.toggle(); model.controller?.applySubtitleStyle() })
+            var rows: [OptionRow] = [OptionRow(label: "Background", isHeader: true)]
+            for value in SubtitleStyle.styles {
+                rows.append(OptionRow(label: value.label, isSelected: subStyle == value.id) {
+                    subStyle = value.id; applySubtitleStyleSoon()
+                })
+            }
+            rows.append(OptionRow(label: "Styled (ASS) subtitles", isHeader: true))
+            for value in SubtitleStyle.assOverrides {
+                rows.append(OptionRow(label: value.label, isSelected: subAssOverride == value.id) {
+                    subAssOverride = value.id; applySubtitleStyleSoon()
+                })
+            }
+            if subStyle == "box" {
+                rows.append(OptionRow(label: "Background opacity", isHeader: true))
+                for value in SubtitleStyle.opacities {
+                    rows.append(OptionRow(label: "\(Int(value * 100))%", isSelected: abs(subBoxOpacity - value) < 0.01) {
+                        subBoxOpacity = value; applySubtitleStyleSoon()
+                    })
+                }
+            }
+            if subStyle == "outline" {
+                rows.append(OptionRow(label: "Outline thickness", isHeader: true))
+                for value in SubtitleStyle.outlineSizes.dropFirst() {
+                    rows.append(OptionRow(label: String(format: "%.0f px", value), isSelected: abs(subBorderSize - value) < 0.01) {
+                        subBorderSize = value; applySubtitleStyleSoon()
+                    })
+                }
+            }
+            rows.append(OptionRow(label: "Font", isHeader: true))
+            for value in SubtitleStyle.fonts {
+                rows.append(OptionRow(label: value.label, isSelected: subFont == value.id) {
+                    subFont = value.id; applySubtitleStyleSoon()
+                })
+            }
+            rows.append(OptionRow(label: "Bold text", detail: subBold ? "On" : "Off", isSelected: subBold) {
+                subBold.toggle(); applySubtitleStyleSoon()
+            })
+            rows.append(OptionRow(label: "Size", isHeader: true))
+            for value in SubtitleStyle.fontSizes {
+                rows.append(OptionRow(label: String(format: "%.0f px", value), isSelected: abs(subFontSize - value) < 0.01) {
+                    subFontSize = value; applySubtitleStyleSoon()
+                })
+            }
+            rows.append(OptionRow(label: "Opacity", isHeader: true))
+            for value in SubtitleStyle.opacities {
+                rows.append(OptionRow(label: "\(Int(value * 100))%", isSelected: abs(subOpacity - value) < 0.01) {
+                    subOpacity = value; applySubtitleStyleSoon()
+                })
+            }
+            rows.append(OptionRow(label: "Distance from bottom", isHeader: true))
+            for value in SubtitleStyle.margins {
+                rows.append(OptionRow(label: String(format: "%.0f%%", value), isSelected: abs(subMargin - value) < 0.01) {
+                    subMargin = value; applySubtitleStyleSoon()
+                })
+            }
+            rows.append(OptionRow(label: "Alignment", isHeader: true))
+            for value in ["left", "center", "right"] {
+                rows.append(OptionRow(label: value.capitalized, isSelected: subAlignment == value) {
+                    subAlignment = value; applySubtitleStyleSoon()
+                })
+            }
+            rows.append(OptionRow(label: "Line spacing", isHeader: true))
+            for value in SubtitleStyle.lineSpacings {
+                rows.append(OptionRow(label: String(format: "%+.0f px", value), isSelected: abs(subLineSpacing - value) < 0.01) {
+                    subLineSpacing = value; applySubtitleStyleSoon()
+                })
+            }
+            rows.append(OptionRow(label: "Text color", isHeader: true))
+            for value in SubtitleStyle.textColors {
+                rows.append(OptionRow(label: value.label, isSelected: subFontColor == value.id) {
+                    subFontColor = value.id; applySubtitleStyleSoon()
+                })
+            }
+            rows.append(OptionRow(label: "Outline color", isHeader: true))
+            for value in SubtitleStyle.edgeColors {
+                rows.append(OptionRow(label: value.label, isSelected: subBorderColor == value.id) {
+                    subBorderColor = value.id; applySubtitleStyleSoon()
+                })
+            }
+            if subStyle == "box" {
+                rows.append(OptionRow(label: "Box color", isHeader: true))
+                for value in SubtitleStyle.edgeColors {
+                    rows.append(OptionRow(label: value.label, isSelected: subBoxColor == value.id) {
+                        subBoxColor = value.id; applySubtitleStyleSoon()
+                    })
+                }
+            }
+            rows.append(OptionRow(label: "Reset subtitle appearance") {
+                resetSubtitleAppearance(); applySubtitleStyleSoon()
+            })
             return rows
         case .aspect:
             let mode = model.controller?.videoSizeMode ?? "original"
@@ -421,18 +533,18 @@ struct PlayerView: View {
         }
     }
 
-    private func groupedTrackRows(_ tracks: [MPVTrack], select: @escaping (Int) -> Void) -> [OptionRow] {
+    private func groupedTrackRows(_ tracks: [MPVTrack], selectedID: Int?, select: @escaping (Int) -> Void) -> [OptionRow] {
         let groups = Dictionary(grouping: tracks) { $0.lang.isEmpty ? "und" : $0.lang.lowercased() }
         var rows: [OptionRow] = []
         for code in groups.keys.sorted(by: { langName($0) < langName($1) }) {
             let ts = groups[code]!
             if ts.count == 1 {
                 let t = ts[0]
-                rows.append(OptionRow(label: langName(code), detail: t.title, isSelected: t.selected) { select(t.id) })
+                rows.append(OptionRow(label: langName(code), detail: t.title, isSelected: selectedID == t.id) { select(t.id) })
             } else {
                 rows.append(OptionRow(label: langName(code), isHeader: true))
                 for (i, t) in ts.enumerated() {
-                    rows.append(OptionRow(label: t.title.isEmpty ? "Track \(i + 1)" : t.title, isSelected: t.selected) { select(t.id) })
+                    rows.append(OptionRow(label: t.title.isEmpty ? "Track \(i + 1)" : t.title, isSelected: selectedID == t.id) { select(t.id) })
                 }
             }
         }
@@ -478,19 +590,25 @@ struct PlayerView: View {
                                 } else {
                                     HStack {
                                         Text(row.label).lineLimit(1)
-                                            .foregroundStyle(i == optionRow ? .black : .white)
+                                            .foregroundStyle(.white)
                                         Spacer()
                                         if row.isSelected {
                                             Image(systemName: "checkmark")
-                                                .foregroundStyle(i == optionRow ? .black : accent)
+                                                .foregroundStyle(accent)
                                         } else if !row.detail.isEmpty {
                                             Text(row.detail)
-                                                .foregroundStyle(i == optionRow ? .black.opacity(0.85) : .white.opacity(0.6))
+                                                .foregroundStyle(.white.opacity(0.62))
                                         }
                                     }
                                     .padding(.horizontal, 24).padding(.vertical, 12)
-                                    .background(i == optionRow ? accent : Color.clear)
+                                    .background(i == optionRow ? accent.opacity(0.28) : Color.clear)
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                            .stroke(i == optionRow ? accent.opacity(0.9) : .clear, lineWidth: 1.5)
+                                    }
                                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                    .scaleEffect(i == optionRow ? 1.015 : 1)
+                                    .animation(.spring(response: 0.25, dampingFraction: 0.78), value: optionRow)
                                     .id(i)
                                 }
                             }
@@ -500,10 +618,18 @@ struct PlayerView: View {
                     .onChange(of: optionRow) { _ in withAnimation { proxy.scrollTo(optionRow, anchor: .center) } }
                 }
             }
-            .frame(width: 760)
+            .frame(width: 720)
             .frame(maxHeight: .infinity)
-            .background(Color(white: 0.08).opacity(0.98))
+            .harborGlass(cornerRadius: 38, tint: Color.black.opacity(0.16))
+            .overlay {
+                RoundedRectangle(cornerRadius: 38, style: .continuous)
+                    .stroke(.white.opacity(0.16), lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.5), radius: 40, x: -12, y: 18)
+            .padding(.vertical, 40)
+            .padding(.trailing, 42)
         }
+        .background(Color.black.opacity(0.16))
         .ignoresSafeArea()
         .transition(.move(edge: .trailing))
     }
@@ -533,17 +659,82 @@ struct PlayerView: View {
         showInfo = true; selected = .play; scheduleHide()
     }
 
-    private func setAudio(_ id: Int) { model.controller?.setAudioTrack(id); refreshTracksSoon() }
-    private func setSub(_ id: Int) { model.controller?.setSubtitleTrack(id); refreshTracksSoon() }
+    private func setAudio(_ id: Int) {
+        selectedAudioTrackID = id
+        pendingAudioTrackID = id
+        audioRecoveryStage = 0
+        lastAudioRecovery = .distantPast
+        model.controller?.setAudioTrack(id)
+        refreshTracksSoon()
+    }
+    private func setSub(_ id: Int) {
+        selectedSubtitleTrackID = id
+        model.controller?.setSubtitleTrack(id)
+        refreshTracksSoon()
+    }
 
     private func refreshTracks() {
-        audioTracks = model.controller?.tracks(ofType: "audio") ?? []
-        subtitleTracks = model.controller?.tracks(ofType: "sub") ?? []
+        let freshAudio = model.controller?.tracks(ofType: "audio") ?? []
+        let freshSubtitles = model.controller?.tracks(ofType: "sub") ?? []
+        audioTracks = freshAudio
+        subtitleTracks = freshSubtitles
+        let actualAudio = freshAudio.first(where: \.selected)?.id
+        if let pendingAudioTrackID {
+            selectedAudioTrackID = pendingAudioTrackID
+            if actualAudio == pendingAudioTrackID { self.pendingAudioTrackID = nil }
+        } else {
+            selectedAudioTrackID = actualAudio
+        }
+        selectedSubtitleTrackID = freshSubtitles.first(where: \.selected)?.id ?? -1
         let s = model.controller?.mediaSummary()
         videoHeight = s?.height ?? 0; audioCodec = s?.audioCodec ?? ""; audioOut = s?.audioOut ?? ""
     }
     private func refreshTracksSoon() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { refreshTracks() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { refreshTracks() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { refreshTracks() }
+    }
+
+    private func monitorAudioOutput() {
+        let now = Date()
+        guard now.timeIntervalSince(lastMediaRefresh) >= 0.8 else { return }
+        lastMediaRefresh = now
+        let summary = model.controller?.mediaSummary()
+        videoHeight = summary?.height ?? videoHeight
+        audioCodec = summary?.audioCodec ?? audioCodec
+        audioOut = summary?.audioOut ?? ""
+        if !audioOut.isEmpty {
+            audioRecoveryStage = 0
+            return
+        }
+        guard now.timeIntervalSince(readyAt) >= 2,
+              !audioTracks.isEmpty,
+              audioRecoveryStage < 2,
+              now.timeIntervalSince(lastAudioRecovery) >= 2.5 else { return }
+        lastAudioRecovery = now
+        model.controller?.recoverAudioOutput(forceStereo: audioRecoveryStage == 1)
+        audioRecoveryStage += 1
+        refreshTracksSoon()
+    }
+
+    private func applySubtitleStyleSoon() {
+        DispatchQueue.main.async { model.controller?.applySubtitleStyle() }
+    }
+
+    private func resetSubtitleAppearance() {
+        subStyle = SubtitleStyle.defaultStyle
+        subAssOverride = "no"
+        subBoxOpacity = 0.6
+        subBorderSize = 2
+        subFont = "inter"
+        subBold = false
+        subFontSize = SubtitleStyle.defaultFontSize
+        subOpacity = 1
+        subMargin = 12
+        subAlignment = "center"
+        subLineSpacing = 0
+        subFontColor = SubtitleStyle.defaultFontColor
+        subBorderColor = SubtitleStyle.defaultBorderColor
+        subBoxColor = SubtitleStyle.defaultBoxColor
     }
 
     /// Once the file is playing, apply default speed + preferred audio/subtitle language once
@@ -561,16 +752,16 @@ struct PlayerView: View {
 
         // Preferred audio language.
         if !prefAudioLang.isEmpty, let a = audioTracks.first(where: { $0.lang.lowercased().hasPrefix(prefAudioLang) }) {
-            model.controller?.setAudioTrack(a.id)
+            setAudio(a.id)
         }
         // Subtitles: off by default, or preferred language.
         if subsOffByDefault {
-            model.controller?.setSubtitleTrack(-1)
+            setSub(-1)
         } else if !prefSubLang.isEmpty,
                   let s = subtitleTracks.first(where: {
                       $0.lang.lowercased().hasPrefix(prefSubLang) && (!preferEmbedded || !$0.external)
                   }) ?? subtitleTracks.first(where: { $0.lang.lowercased().hasPrefix(prefSubLang) }) {
-            model.controller?.setSubtitleTrack(s.id)
+            setSub(s.id)
         }
         refreshTracksSoon()
     }
@@ -658,6 +849,19 @@ struct PlayerView: View {
     }
 }
 
+private extension View {
+    @ViewBuilder
+    func harborGlass(cornerRadius: CGFloat, tint: Color? = nil) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        if #available(tvOS 26.0, *) {
+            glassEffect(.regular.tint(tint), in: shape)
+        } else {
+            background(.ultraThinMaterial, in: shape)
+                .overlay(shape.stroke(.white.opacity(0.12), lineWidth: 1))
+        }
+    }
+}
+
 // MARK: - UIKit remote catcher
 
 /// A focusable UIView that captures every Siri-remote press and forwards it to SwiftUI. Far more
@@ -726,10 +930,21 @@ private struct RemoteCatcher: UIViewControllerRepresentable {
             if !handled { super.pressesBegan(presses, with: event) }
         }
         override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-            stopRepeat(); super.pressesEnded(presses, with: event)
+            stopRepeat()
+            let unhandled = Set(presses.filter { !captures($0.type) })
+            if !unhandled.isEmpty { super.pressesEnded(unhandled, with: event) }
         }
         override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-            stopRepeat(); super.pressesCancelled(presses, with: event)
+            stopRepeat()
+            let unhandled = Set(presses.filter { !captures($0.type) })
+            if !unhandled.isEmpty { super.pressesCancelled(unhandled, with: event) }
+        }
+
+        private func captures(_ type: UIPress.PressType) -> Bool {
+            switch type {
+            case .select, .menu, .playPause, .upArrow, .downArrow, .leftArrow, .rightArrow: return true
+            default: return false
+            }
         }
 
         private func startRepeat(_ type: UIPress.PressType) {

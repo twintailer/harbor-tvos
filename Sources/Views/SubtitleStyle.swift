@@ -16,6 +16,13 @@ enum SubtitleStyle {
         static let opacity = "harbor.sub.opacity"
         static let alignment = "harbor.sub.alignment"
         static let font = "harbor.sub.font"
+        static let fontSize = "harbor.sub.fontSize"
+        static let fontColor = "harbor.sub.fontColor"
+        static let borderColor = "harbor.sub.borderColor"
+        static let boxColor = "harbor.sub.boxColor"
+        static let boxOpacity = "harbor.sub.boxOpacity"
+        static let assOverride = "harbor.sub.assOverride"
+        static let lineSpacing = "harbor.sub.lineSpacing"
         static let preferEmbedded = "harbor.pref.preferEmbeddedSubs"
         // language + track prefs
         static let subLang = "harbor.pref.subLang"
@@ -84,6 +91,10 @@ enum SubtitleStyle {
     static let defaultSize = "medium"
     static let defaultColor = "white"
     static let defaultStyle = "shadow"
+    static let defaultFontSize = 52.0
+    static let defaultFontColor = "#FFFFFF"
+    static let defaultBorderColor = "#000000"
+    static let defaultBoxColor = "#000000"
 
     struct Preset: Identifiable, Hashable { let id: String; let label: String }
 
@@ -102,10 +113,41 @@ enum SubtitleStyle {
     ]
     // Matches Harbor's subStyle: shadow / outline / box.
     static let styles: [Preset] = [
-        .init(id: "shadow", label: "Shadow"),
+        .init(id: "shadow", label: "Drop shadow"),
         .init(id: "outline", label: "Outline"),
-        .init(id: "box", label: "Box"),
+        .init(id: "box", label: "Black bar"),
     ]
+    static let assOverrides: [Preset] = [
+        .init(id: "no", label: "Keep original"),
+        .init(id: "scale", label: "Resize only"),
+        .init(id: "force", label: "Use my style"),
+    ]
+    static let fonts: [Preset] = [
+        .init(id: "inter", label: "Inter / Sans serif"),
+        .init(id: "system", label: "System"),
+        .init(id: "rounded", label: "Rounded"),
+        .init(id: "serif", label: "Serif"),
+        .init(id: "arabic", label: "Arabic"),
+    ]
+    static let textColors: [Preset] = [
+        .init(id: "#FFFFFF", label: "White"),
+        .init(id: "#FFF36A", label: "Yellow"),
+        .init(id: "#61E7FF", label: "Cyan"),
+        .init(id: "#74E68A", label: "Green"),
+        .init(id: "#FF9ED2", label: "Pink"),
+    ]
+    static let edgeColors: [Preset] = [
+        .init(id: "#000000", label: "Black"),
+        .init(id: "#20242C", label: "Charcoal"),
+        .init(id: "#FFFFFF", label: "White"),
+        .init(id: "#173C70", label: "Blue"),
+        .init(id: "#5B173E", label: "Plum"),
+    ]
+    static let fontSizes: [Double] = [24, 32, 40, 48, 52, 56, 64, 72, 80, 96, 112]
+    static let outlineSizes: [Double] = [0, 1, 2, 3, 4, 5, 6]
+    static let margins: [Double] = [0, 6, 12, 18, 24, 32, 40, 50, 65, 80, 100]
+    static let opacities: [Double] = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+    static let lineSpacings: [Double] = [-4, -2, 0, 2, 4, 6, 8, 12]
     // Language options (code "" = system/auto). Audio "off" isn't offered.
     static let languages: [Preset] = [
         .init(id: "", label: "System / Auto"),
@@ -131,59 +173,105 @@ enum SubtitleStyle {
         UserDefaults.standard.string(forKey: key) ?? fallback
     }
 
+    private static func number(_ key: String, _ fallback: Double) -> Double {
+        (UserDefaults.standard.object(forKey: key) as? NSNumber)?.doubleValue ?? fallback
+    }
+
+    private static func legacyColor(_ id: String) -> String {
+        switch id {
+        case "yellow": return "#FFFF00"
+        case "cyan": return "#00FFFF"
+        case "green": return "#74E68A"
+        case "pink": return "#FF9ED2"
+        default: return defaultFontColor
+        }
+    }
+
+    private static func legacySize(_ id: String) -> Double {
+        switch id {
+        case "small": return 40
+        case "large": return 64
+        case "xlarge": return 80
+        default: return defaultFontSize
+        }
+    }
+
+    private static func fontName(_ id: String) -> String {
+        switch id {
+        case "system": return "Helvetica Neue"
+        case "rounded": return "Arial Rounded MT Bold"
+        case "serif": return "New York"
+        case "arabic": return "Geeza Pro"
+        default: return "Arial"
+        }
+    }
+
+    private static func mpvColor(_ raw: String, opacity: Double) -> String {
+        let value = raw.uppercased()
+        let rgb = value.hasPrefix("#") && value.count == 7 ? String(value.dropFirst()) : "FFFFFF"
+        let alpha = Int(max(0, min(1, opacity)) * 255.0).clamped(to: 0...255)
+        return String(format: "#%02X%@", alpha, rgb)
+    }
+
     /// The current subtitle appearance as mpv option name/value pairs.
     static var mpvOptions: [(String, String)] {
         let size = str(Key.size, defaultSize)
-        let color = str(Key.color, defaultColor)
+        let legacyColorID = str(Key.color, defaultColor)
         let style = str(Key.style, defaultStyle)
         let bold = (UserDefaults.standard.object(forKey: Key.bold) as? Bool) ?? false
-        let borderSize = (UserDefaults.standard.object(forKey: Key.borderSize) as? Double) ?? 2.0
-        let margin = (UserDefaults.standard.object(forKey: Key.margin) as? Double) ?? 12.0
-        let opacity = (UserDefaults.standard.object(forKey: Key.opacity) as? Double) ?? 1.0
+        let borderSize = number(Key.borderSize, 2.0)
+        let margin = number(Key.margin, 12.0)
+        let opacity = number(Key.opacity, 1.0)
+        let boxOpacity = number(Key.boxOpacity, 0.6)
+        let fontSize = number(Key.fontSize, legacySize(size))
+        let lineSpacing = number(Key.lineSpacing, 0)
         let alignment = str(Key.alignment, "center")
-        let font = str(Key.font, "sans")
+        let font = str(Key.font, "inter")
+        let fontColor = str(Key.fontColor, legacyColor(legacyColorID))
+        let borderColor = str(Key.borderColor, defaultBorderColor)
+        let boxColor = str(Key.boxColor, defaultBoxColor)
+        let assOverride = str(Key.assOverride, "no")
+        let forceMargins = assOverride == "no" ? "no" : "yes"
 
         var opts: [(String, String)] = []
-        let fontSize: String
-        switch size {
-        case "small":  fontSize = "40"
-        case "large":  fontSize = "64"
-        case "xlarge": fontSize = "80"
-        default:       fontSize = "52"
-        }
-        opts.append(("sub-font-size", fontSize))
-
-        let hex: String
-        switch color {
-        case "yellow": hex = "#FFFF00"
-        case "cyan":   hex = "#00FFFF"
-        case "green":  hex = "#74E68A"
-        case "pink":   hex = "#FF9ED2"
-        default:       hex = "#FFFFFF"
-        }
-        opts.append(("sub-color", hex))
-        opts.append(("sub-opacity", String(format: "%.2f", opacity)))
+        opts.append(("sub-font-size", "32"))
+        opts.append(("sub-scale", String(format: "%.3f", max(0.4, min(4, fontSize / 32.0)))))
+        opts.append(("sub-color", mpvColor(fontColor, opacity: opacity)))
         opts.append(("sub-bold", bold ? "yes" : "no"))
-        opts.append(("sub-border-color", "#000000"))
+        opts.append(("sub-border-color", mpvColor(borderColor, opacity: opacity)))
         opts.append(("sub-margin-y", String(format: "%.0f", margin)))
+        opts.append(("sub-pos", String(format: "%.0f", max(0, min(100, 100 - margin)))))
         opts.append(("sub-align-x", alignment))
-        opts.append(("sub-font", font == "serif" ? "New York" : "Arial"))
+        opts.append(("sub-font", fontName(font)))
+        opts.append(("sub-ass-override", assOverride))
+        opts.append(("sub-ass-force-margins", forceMargins))
+        opts.append(("sub-use-margins", forceMargins))
+        opts.append(("sub-line-spacing", String(format: "%.1f", lineSpacing)))
 
         switch style {
         case "box":
-            opts.append(("sub-back-color", "#90000000"))
+            opts.append(("sub-border-style", "background-box"))
+            opts.append(("sub-back-color", mpvColor(boxColor, opacity: boxOpacity * opacity)))
             opts.append(("sub-border-size", "0"))
             opts.append(("sub-shadow-offset", "0"))
         case "outline":
+            opts.append(("sub-border-style", "outline-and-shadow"))
             opts.append(("sub-back-color", "#00000000"))
             opts.append(("sub-border-size", String(format: "%.1f", max(1, borderSize))))
             opts.append(("sub-shadow-offset", "0"))
         default: // shadow
-            opts.append(("sub-back-color", "#00000000"))
+            opts.append(("sub-border-style", "outline-and-shadow"))
+            opts.append(("sub-back-color", mpvColor("#000000", opacity: opacity)))
             opts.append(("sub-border-size", String(format: "%.1f", borderSize)))
-            opts.append(("sub-shadow-offset", "1.5"))
+            opts.append(("sub-shadow-offset", "1.4"))
         }
         return opts
+    }
+}
+
+private extension Comparable {
+    func clamped(to limits: ClosedRange<Self>) -> Self {
+        Swift.min(Swift.max(self, limits.lowerBound), limits.upperBound)
     }
 }
 
@@ -263,6 +351,9 @@ enum HarborSettings {
 
     static func registerDefaults() {
         let defaults = UserDefaults.standard
+        if defaults.string(forKey: SubtitleStyle.Key.episodeSort) == "oldest" {
+            defaults.set("aired", forKey: SubtitleStyle.Key.episodeSort)
+        }
         if defaults.object(forKey: SubtitleStyle.Key.seekBackStep) == nil,
            let legacy = defaults.object(forKey: SubtitleStyle.Key.seekStep) as? Int {
             defaults.set(legacy, forKey: SubtitleStyle.Key.seekBackStep)
@@ -297,6 +388,13 @@ enum HarborSettings {
             SubtitleStyle.Key.opacity: 1.0,
             SubtitleStyle.Key.borderSize: 2.0,
             SubtitleStyle.Key.margin: 12.0,
+            SubtitleStyle.Key.fontSize: SubtitleStyle.defaultFontSize,
+            SubtitleStyle.Key.fontColor: SubtitleStyle.defaultFontColor,
+            SubtitleStyle.Key.borderColor: SubtitleStyle.defaultBorderColor,
+            SubtitleStyle.Key.boxColor: SubtitleStyle.defaultBoxColor,
+            SubtitleStyle.Key.boxOpacity: 0.6,
+            SubtitleStyle.Key.assOverride: "no",
+            SubtitleStyle.Key.lineSpacing: 0.0,
         ])
     }
 

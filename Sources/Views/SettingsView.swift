@@ -357,10 +357,10 @@ private struct VideoTuningPanel: View {
                 }
             }
             Section("Picture adjustments") {
-                valueSlider("Brightness", value: $brightness, range: -20...20)
-                valueSlider("Contrast", value: $contrast, range: -20...20)
-                valueSlider("Saturation", value: $saturation, range: -20...20)
-                valueSlider("Gamma", value: $gamma, range: -20...20)
+                valuePicker("Brightness", value: $brightness)
+                valuePicker("Contrast", value: $contrast)
+                valuePicker("Saturation", value: $saturation)
+                valuePicker("Gamma", value: $gamma)
                 Button("Reset picture adjustments") {
                     brightness = 0; contrast = 0; saturation = 0; gamma = 0
                 }
@@ -382,12 +382,12 @@ private struct VideoTuningPanel: View {
         .navigationTitle("Video tuning")
     }
 
-    private func valueSlider(_ label: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack { Text(label); Spacer(); Text(String(format: "%+.0f", value.wrappedValue)).foregroundStyle(.secondary) }
-            Slider(value: value, in: range, step: 1)
+    private func valuePicker(_ label: String, value: Binding<Double>) -> some View {
+        Picker(label, selection: value) {
+            ForEach([-20.0, -10.0, -5.0, 0.0, 5.0, 10.0, 20.0], id: \.self) { option in
+                Text(String(format: "%+.0f", option)).tag(option)
+            }
         }
-        .padding(.vertical, 4)
     }
 }
 
@@ -512,17 +512,20 @@ private struct LanguagesPanel: View {
                     Text("Right").tag("right")
                 }
                 Toggle("Bold", isOn: $subBold)
-                VStack(alignment: .leading) {
-                    LabeledContent("Outline", value: String(format: "%.0f", borderSize))
-                    Slider(value: $borderSize, in: 0...5, step: 1)
+                Picker("Outline", selection: $borderSize) {
+                    ForEach([0.0, 1.0, 2.0, 3.0, 4.0, 5.0], id: \.self) { value in
+                        Text(String(format: "%.0f", value)).tag(value)
+                    }
                 }
-                VStack(alignment: .leading) {
-                    LabeledContent("Distance from bottom", value: String(format: "%.0f", margin))
-                    Slider(value: $margin, in: 0...80, step: 4)
+                Picker("Distance from bottom", selection: $margin) {
+                    ForEach([0.0, 8.0, 12.0, 20.0, 32.0, 48.0, 64.0, 80.0], id: \.self) { value in
+                        Text(String(format: "%.0f", value)).tag(value)
+                    }
                 }
-                VStack(alignment: .leading) {
-                    LabeledContent("Opacity", value: "\(Int(opacity * 100))%")
-                    Slider(value: $opacity, in: 0.4...1, step: 0.1)
+                Picker("Opacity", selection: $opacity) {
+                    ForEach([0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0], id: \.self) { value in
+                        Text("\(Int(value * 100))%").tag(value)
+                    }
                 }
             }
         }

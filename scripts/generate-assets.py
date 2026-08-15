@@ -40,7 +40,10 @@ def centered(width: int, height: int, fraction: float) -> Image.Image:
 
 
 def icon_art(width: int, height: int) -> Image.Image:
-    return cover(width, height) if FULL_BLEED else centered(width, height, 0.72)
+    art = cover(width, height) if FULL_BLEED else centered(width, height, 0.72)
+    opaque = Image.new("RGBA", (width, height), BACKGROUND)
+    opaque.alpha_composite(art)
+    return opaque.convert("RGB")
 
 
 def shelf_art(width: int, height: int) -> Image.Image:
@@ -75,7 +78,9 @@ def image_stack(directory: Path, width: int, height: int) -> None:
     for name in ("Back", "Middle", "Front"):
         layer = directory / f"{name}.imagestacklayer"
         content = layer / "Content.imageset"
-        image_set(content, (width, height), "icon_1x.png", icon_art if name == "Back" else transparent)
+        # Xcode requires the final layer in a tvOS image stack to be fully opaque.
+        # Keep the full composition on Front; the other layers remain transparent.
+        image_set(content, (width, height), "icon_1x.png", icon_art if name == "Front" else transparent)
         write_json(layer / "Contents.json", {"info": {"author": "xcode", "version": 1}})
         layers.append({"filename": f"{name}.imagestacklayer"})
     write_json(

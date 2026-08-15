@@ -62,7 +62,7 @@ struct RootView: View {
     private var backgroundColor: Color {
         switch background {
         case "oled": return .black
-        case "system": return Color(uiColor: .systemBackground)
+        case "system": return .black
         default: return Color(red: 0.035, green: 0.047, blue: 0.065)
         }
     }

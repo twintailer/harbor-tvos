@@ -10,7 +10,9 @@ settings:
 packages:
   MPVKit:
     url: https://github.com/mpvkit/MPVKit
-    exactVersion: 0.41.0
+    # 1.0.0 adds the AVFoundation audio output for iOS/tvOS. Its AudioUnit-only
+    # predecessor fails on some tvOS 26 HDMI routes and leaves current-ao empty.
+    exactVersion: 1.0.0
 targets:
   HarborTV:
     type: application
@@ -23,16 +25,15 @@ targets:
         buildPhase: resources
     dependencies:
       - package: MPVKit
-        # GPL variant — the one StremioX ships on real Apple TVs. The plain MPVKit
-        # product's tvOS slice initialized NO audio output at all ("AO —" on device);
-        # with -GPL the default driver chain works.
+        # GPL variant keeps Harbor's broad codec/protocol support. MPVKit 1.0.0
+        # contains both AVFoundation and AudioUnit output drivers on tvOS.
         product: MPVKit-GPL
     info:
       path: Info.plist
       properties:
         CFBundleDisplayName: Harbor
-        CFBundleShortVersionString: "0.2.1"
-        CFBundleVersion: "3"
+        CFBundleShortVersionString: "0.2.2"
+        CFBundleVersion: "4"
         UIRequiredDeviceCapabilities: [arm64]
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true

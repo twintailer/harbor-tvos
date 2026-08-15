@@ -166,7 +166,9 @@ final class MPVViewController: UIViewController {
             setOpt("scale", "spline36")
             setOpt("cscale", "spline36")
         }
-        mpv_request_log_messages(ctx, "warn")   // surfaced via the event loop below
+        // Keep audio-driver diagnostics visible on the Apple TV. MPVKit 1.0.0's
+        // AVFoundation fallback is selected below specifically for tvOS HDMI routes.
+        mpv_request_log_messages(ctx, "info")
         var wid = Int64(Int(bitPattern: Unmanaged.passUnretained(layer).toOpaque()))
         mpv_set_option(ctx, "wid", MPV_FORMAT_INT64, &wid)
         setOpt("vo", "gpu-next")
@@ -177,10 +179,14 @@ final class MPVViewController: UIViewController {
         default: setOpt("hwdec", "videotoolbox")
         }
         setOpt("video-rotate", "no")
-        // MPVKit-GPL's tvOS slice contains the AudioUnit backend. Select it explicitly so
-        // libmpv never settles on the null output while the HDMI route is still starting.
-        setOpt("ao", "audiounit")
+        // MPVKit 1.0.0 enables mpv's AVSampleBufferAudioRenderer output on tvOS.
+        // Prefer it because AudioUnit cannot query the channel layout of some tvOS 26
+        // HDMI routes (notably the 32-channel route exposed by Apple TV 4K), which
+        // leaves `current-ao` empty and produces no sound. Keep AudioUnit as a fallback
+        // for older/simple routes rather than falling through to the null output.
+        setOpt("ao", "avfoundation,audiounit")
         setOpt("audio-channels", defaults.bool(forKey: SubtitleStyle.Key.mpvDownmix) ? "stereo" : "auto-safe")
+        setOpt("audio-exclusive", "no")
         // Subtitles: match OS language, auto-load, embedded fonts.
         setOpt("subs-match-os-language", "yes")
         setOpt("subs-fallback", "yes")

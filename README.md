@@ -13,7 +13,8 @@ using the same Stremio account, add-on, catalog, metadata and stream APIs.
   Watching
 - Stream resolution through the user's installed Stremio add-ons, remembered
   sources, Harbor ranking and safety filtering
-- MPVKit-GPL playback for HLS, MKV, HDR, multichannel audio and embedded tracks
+- MPVKit-GPL 1.0 playback for HLS, MKV, HDR, multichannel audio and embedded
+  tracks, using the tvOS AVFoundation audio output with AudioUnit fallback
 - Resume/progress sync, next-episode playback, independent seek steps, playback
   speed, audio/subtitle selection and aspect controls
 - tvOS-native settings in the same group order as Harbor desktop/Android:
@@ -36,7 +37,7 @@ The GitHub workflow builds an unsigned tvOS IPA on a macOS runner:
 gh workflow run tvos-build.yml
 ```
 
-Artifact: `harbor-tvos` → `Harbor_tvOS_0.2.1_unsigned.ipa`.
+Artifact: `harbor-tvos` → `Harbor_tvOS_0.2.2_unsigned.ipa`.
 
 For a local build on macOS, install Pillow and XcodeGen, then run
 `python3 scripts/generate-assets.py`, `bash scripts/fetch-anime4k.sh` and

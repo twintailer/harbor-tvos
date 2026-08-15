@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct SearchView: View {
+    @EnvironmentObject private var auth: AuthStore
     @State private var query = ""
     @State private var results: [MetaItem] = []
 
@@ -19,12 +20,16 @@ struct SearchView: View {
             .navigationDestination(for: MetaItem.self) { DetailView(item: $0) }
         }
         .searchable(text: $query, prompt: "Search movies & series")
-        .task(id: query) {
+        .task(id: "\(query)|\(addonRevision)") {
             guard query.count >= 2 else { results = []; return }
             try? await Task.sleep(nanoseconds: 350_000_000)
             if Task.isCancelled { return }
-            let hits = await CatalogService.search(query: query)
+            let hits = await AddonService.search(addons: auth.addons, query: query)
             await MainActor.run { results = hits }
         }
+    }
+
+    private var addonRevision: String {
+        auth.addons.map(\.transportUrl).joined(separator: "|")
     }
 }

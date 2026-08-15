@@ -9,21 +9,35 @@ struct DetailView: View {
     @State private var resolving = false
     @State private var libItem: StremioService.LibraryItem?
     @State private var selectedSeason: Int?
+    @State private var pendingStreamId = ""
+    @State private var pendingTitle = ""
+    @State private var pendingVideo: MetaItem.Video?
+    @State private var changingBookmark = false
+    @AppStorage(SubtitleStyle.Key.instantPlay) private var instantPlay = true
+    @AppStorage(SubtitleStyle.Key.rememberStream) private var rememberStream = true
+    @AppStorage(SubtitleStyle.Key.resume) private var resumePlayback = true
 
     private var meta: MetaItem { full ?? item }
 
     // Resolve streams for a movie or a specific episode via the user's addons,
     // then auto-play the first direct one — or show a picker.
-    private func play(streamId: String, title: String) {
+    private func play(streamId: String, title: String, video: MetaItem.Video? = nil) {
         guard !auth.addons.isEmpty else { pickerStreams = []; return }
+        pendingStreamId = streamId
+        pendingTitle = title
+        pendingVideo = video
         resolving = true
         Task {
             let streams = await StreamResolver.streams(
                 addons: auth.addons, type: meta.type, id: streamId)
             await MainActor.run {
                 resolving = false
-                if let first = streams.first(where: { $0.isPlayable }), let u = URL(string: first.url ?? "") {
-                    player = PlayerTarget(title: title, url: u)
+                let remembered = rememberStream
+                    ? UserDefaults.standard.string(forKey: lastStreamKey(streamId))
+                        .flatMap { id in streams.first { $0.id == id && $0.isPlayable } }
+                    : nil
+                if instantPlay, let first = remembered ?? streams.first(where: { $0.isPlayable }) {
+                    player = makeTarget(stream: first, streamId: streamId, title: title, video: video)
                 } else {
                     pickerStreams = streams
                 }
@@ -56,13 +70,28 @@ struct DetailView: View {
 
                     HStack(spacing: 24) {
                         Button {
-                            play(streamId: resumeStreamId ?? meta.id, title: meta.name)
+                            if let episode = playButtonEpisode {
+                                play(streamId: streamID(for: episode),
+                                     title: episodeFullTitle(episode), video: episode)
+                            } else {
+                                play(streamId: meta.id, title: meta.name)
+                            }
                         } label: {
                             Label(playLabelText, systemImage: "play.fill")
                                 .padding(.horizontal, 20)
                         }
                         .buttonStyle(.borderedProminent)
                         .disabled(resolving)
+                        if auth.isSignedIn {
+                            Button {
+                                toggleBookmark()
+                            } label: {
+                                Label(isBookmarked ? "In Library" : "Add to Library",
+                                      systemImage: isBookmarked ? "checkmark" : "plus")
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(changingBookmark)
+                        }
                     }
                     .padding(.top, 8)
                     if !auth.isSignedIn {
@@ -82,10 +111,7 @@ struct DetailView: View {
                             meta: meta, videos: videos,
                             selectedSeason: selectedSeasonBinding(videos),
                             watched: watchedState) { v in
-                                let sid = (v.season != nil && v.episode != nil)
-                                    ? "\(meta.id):\(v.season!):\(v.episode!)"
-                                    : (v.id ?? meta.id)
-                                play(streamId: sid, title: episodeFullTitle(v))
+                                play(streamId: streamID(for: v), title: episodeFullTitle(v), video: v)
                             }
                             .padding(.top, 30)
                     }
@@ -100,7 +126,10 @@ struct DetailView: View {
         .sheet(isPresented: Binding(get: { pickerStreams != nil }, set: { if !$0 { pickerStreams = nil } })) {
             StreamsView(title: meta.name, streams: pickerStreams ?? []) { s in
                 pickerStreams = nil
-                if let u = URL(string: s.url ?? "") { player = PlayerTarget(title: meta.name, url: u) }
+                if rememberStream { UserDefaults.standard.set(s.id, forKey: lastStreamKey(pendingStreamId)) }
+                player = makeTarget(stream: s, streamId: pendingStreamId,
+                                    title: pendingTitle.isEmpty ? meta.name : pendingTitle,
+                                    video: pendingVideo)
             }
         }
         .task {
@@ -114,7 +143,7 @@ struct DetailView: View {
                let vids = cine.videos, !vids.isEmpty {
                 full = (full ?? cine).withVideos(vids)
             }
-            if item.type == "series", auth.isSignedIn, let key = auth.authKey {
+            if auth.isSignedIn, let key = auth.authKey {
                 libItem = await StremioService.libraryItem(authKey: key, id: item.id)
             }
         }
@@ -124,20 +153,30 @@ struct DetailView: View {
 
     private var playLabelText: String {
         if resolving { return "Finding streams…" }
+        if !resumePlayback { return "Play" }
         // Only claim a resumable episode when the state actually names one (S0·E0 = none).
-        if item.type == "series", let se = libItem?.seasonEpisode, se.episode > 0 {
+        if item.type != "movie", let se = libItem?.seasonEpisode, se.episode > 0 {
             return "Resume S\(se.season)·E\(se.episode)"
         }
         if (libItem?.state?.timeOffset ?? 0) > 0 { return "Resume" }
         return "Play"
     }
 
-    /// For a series, resume the current episode from the library state; otherwise the movie id.
-    private var resumeStreamId: String? {
-        guard item.type == "series", let s = libItem?.state else { return nil }
-        if let vid = s.video_id, vid.split(separator: ":").count >= 3 { return vid }
-        if let se = libItem?.seasonEpisode, se.episode > 0 { return "\(meta.id):\(se.season):\(se.episode)" }
-        return nil
+    private var isBookmarked: Bool {
+        guard let libItem else { return false }
+        return !(libItem.removed ?? false) && !(libItem.temp ?? false)
+    }
+
+    private func toggleBookmark() {
+        guard let key = auth.authKey else { return }
+        changingBookmark = true
+        Task {
+            await StremioService.setBookmarked(authKey: key, meta: meta, existing: libItem,
+                                               bookmarked: !isBookmarked)
+            libItem = await StremioService.libraryItem(authKey: key, id: meta.id)
+            await auth.loadLibrary()
+            changingBookmark = false
+        }
     }
 
     private func episodeFullTitle(_ v: MetaItem.Video) -> String {
@@ -145,6 +184,107 @@ struct DetailView: View {
             return "\(meta.name) · S\(s)E\(e) · \(v.title ?? "")"
         }
         return v.title ?? meta.name
+    }
+
+    private func streamID(for video: MetaItem.Video) -> String {
+        if let season = video.season, let episode = video.episode {
+            return "\(meta.id):\(season):\(episode)"
+        }
+        return video.id ?? meta.id
+    }
+
+    private var playButtonEpisode: MetaItem.Video? {
+        guard meta.type != "movie", let videos = meta.videos, !videos.isEmpty else { return nil }
+        if resumePlayback, let currentID = libItem?.state?.video_id,
+           let current = videos.first(where: { streamID(for: $0) == currentID || $0.id == currentID }) {
+            return current
+        }
+        if resumePlayback, let current = libItem?.seasonEpisode,
+           let video = videos.first(where: { $0.season == current.season && $0.episode == current.episode }) {
+            return video
+        }
+        return videos
+            .filter { ($0.season ?? 0) > 0 && ($0.episode ?? 0) > 0 }
+            .sorted {
+                let leftSeason = $0.season ?? 0
+                let rightSeason = $1.season ?? 0
+                return leftSeason == rightSeason
+                    ? ($0.episode ?? 0) < ($1.episode ?? 0)
+                    : leftSeason < rightSeason
+            }
+            .first ?? videos.first
+    }
+
+    private var isAnime: Bool {
+        meta.type == "anime" || meta.id.hasPrefix("kitsu:") || meta.id.hasPrefix("mal:") ||
+            (meta.genres ?? []).contains {
+                $0.localizedCaseInsensitiveContains("anime") || $0.localizedCaseInsensitiveContains("animation")
+            }
+    }
+
+    private func lastStreamKey(_ streamId: String) -> String {
+        "harbor.lastStream.\(meta.id).\(streamId)"
+    }
+
+    private func makeTarget(stream: StreamOption, streamId: String, title: String,
+                            video: MetaItem.Video?) -> PlayerTarget? {
+        guard let url = URL(string: stream.url ?? "") else { return nil }
+        if rememberStream { UserDefaults.standard.set(stream.id, forKey: lastStreamKey(streamId)) }
+        let state = libItem?.state
+        let sameVideo = meta.type == "movie" || state?.video_id == streamId ||
+            (state?.season == video?.season && state?.episode == video?.episode)
+        let start = resumePlayback && sameVideo ? (state?.timeOffset ?? 0) / 1000 : 0
+        let next = video.flatMap { nextEpisode(after: $0) }
+        let playNext: (() -> Void)?
+        if let next {
+            playNext = {
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 700_000_000)
+                    let id: String
+                    if let season = next.season, let episode = next.episode {
+                        id = "\(meta.id):\(season):\(episode)"
+                    } else {
+                        id = next.id ?? meta.id
+                    }
+                    play(streamId: id, title: episodeFullTitle(next), video: next)
+                }
+            }
+        } else {
+            playNext = nil
+        }
+        return PlayerTarget(
+            title: title,
+            url: url,
+            startAt: start,
+            isAnime: isAnime,
+            requestHeaders: stream.requestHeaders,
+            onProgress: { position, duration in
+                guard let key = auth.authKey else { return }
+                Task {
+                    await StremioService.saveProgress(
+                        authKey: key, meta: meta, videoId: streamId,
+                        season: video?.season, episode: video?.episode,
+                        position: position, duration: duration, existing: libItem)
+                    await auth.loadLibrary()
+                    await auth.loadContinueWatching()
+                }
+            },
+            onEnded: playNext)
+    }
+
+    private func nextEpisode(after video: MetaItem.Video) -> MetaItem.Video? {
+        guard let videos = meta.videos, let season = video.season, let episode = video.episode else { return nil }
+        let ordered = videos
+            .filter { ($0.season ?? 0) > 0 && ($0.episode ?? 0) > 0 }
+            .sorted {
+                let leftSeason = $0.season ?? 0
+                let rightSeason = $1.season ?? 0
+                if leftSeason != rightSeason { return leftSeason < rightSeason }
+                return ($0.episode ?? 0) < ($1.episode ?? 0)
+            }
+        guard let index = ordered.firstIndex(where: { $0.season == season && $0.episode == episode }),
+              ordered.indices.contains(index + 1) else { return nil }
+        return ordered[index + 1]
     }
 
     // MARK: - Season selection + per-episode watched state
@@ -192,10 +332,18 @@ struct SeriesEpisodes: View {
     let onPlay: (MetaItem.Video) -> Void
 
     @AppStorage(SubtitleStyle.Key.episodeSort) private var episodeSort = "oldest"
+    @AppStorage(SubtitleStyle.Key.episodeLayout) private var episodeLayout = "list"
+    @AppStorage(SubtitleStyle.Key.hideWatched) private var hideWatched = false
+    @AppStorage(SubtitleStyle.Key.hideUnreleased) private var hideUnreleased = false
 
     private var seasons: [Int] { Array(Set(videos.compactMap { $0.season })).sorted() }
     private var episodesInSeason: [MetaItem.Video] {
-        let sorted = videos.filter { ($0.season ?? 1) == selectedSeason }
+        let sorted = videos.filter {
+            guard ($0.season ?? 1) == selectedSeason else { return false }
+            if hideWatched && watched($0).watched { return false }
+            if hideUnreleased, let date = releaseDate($0.released), date > Date() { return false }
+            return true
+        }
             .sorted { ($0.episode ?? 0) < ($1.episode ?? 0) }
         return episodeSort == "newest" ? Array(sorted.reversed()) : sorted
     }
@@ -223,17 +371,71 @@ struct SeriesEpisodes: View {
             // Plain VStack, NOT LazyVStack: the tvOS focus engine can only move to views
             // that exist, and lazy rows below the fold are never instantiated — which made
             // the episode list unreachable ("can't go down"). Capped for render cost.
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(Array(episodesInSeason.prefix(60).enumerated()), id: \.offset) { _, v in
-                    EpisodeRowTV(meta: meta, video: v, progress: watched(v)) { onPlay(v) }
+            if episodeLayout == "strip" {
+                ScrollView(.horizontal) {
+                    LazyHStack(alignment: .top, spacing: 28) {
+                        ForEach(Array(episodesInSeason.prefix(60).enumerated()), id: \.offset) { _, video in
+                            EpisodeStripCard(video: video, progress: watched(video)) { onPlay(video) }
+                        }
+                    }
+                    .padding(.vertical, 14)
                 }
-                if episodesInSeason.isEmpty {
-                    Text("No episodes listed for this season.")
-                        .font(.system(size: 20)).foregroundStyle(.white.opacity(0.5))
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(episodesInSeason.prefix(60).enumerated()), id: \.offset) { _, v in
+                        EpisodeRowTV(meta: meta, video: v, progress: watched(v)) { onPlay(v) }
+                    }
                 }
+            }
+            if episodesInSeason.isEmpty {
+                Text("No episodes listed for this season.")
+                    .font(.system(size: 20)).foregroundStyle(.white.opacity(0.5))
             }
         }
         .frame(maxWidth: 1400, alignment: .leading)
+    }
+
+    private func releaseDate(_ raw: String?) -> Date? {
+        guard let raw else { return nil }
+        if let date = ISO8601DateFormatter().date(from: raw) { return date }
+        let parser = DateFormatter(); parser.locale = Locale(identifier: "en_US_POSIX"); parser.dateFormat = "yyyy-MM-dd"
+        return parser.date(from: String(raw.prefix(10)))
+    }
+}
+
+private struct EpisodeStripCard: View {
+    let video: MetaItem.Video
+    let progress: EpisodeProgress
+    let onPlay: () -> Void
+    @AppStorage(SubtitleStyle.Key.hideSpoilers) private var hideSpoilers = false
+    @AppStorage(SubtitleStyle.Key.spoilerThumbnails) private var hideThumbnail = true
+    @AppStorage(SubtitleStyle.Key.accent) private var accentID = "green"
+    private var accent: Color { HarborSettings.accentColor(accentID) }
+
+    var body: some View {
+        Button(action: onPlay) {
+            VStack(alignment: .leading, spacing: 10) {
+                ZStack(alignment: .bottomLeading) {
+                    AsyncImage(url: URL(string: video.thumbnail ?? "")) { image in
+                        image.resizable().aspectRatio(contentMode: .fill)
+                    } placeholder: { Color.white.opacity(0.06) }
+                    .frame(width: 360, height: 203)
+                    .blur(radius: hideSpoilers && hideThumbnail ? 24 : 0)
+                    if progress.ratio > 0.01 {
+                        GeometryReader { proxy in
+                            VStack { Spacer(); Rectangle().fill(accent).frame(width: proxy.size.width * progress.ratio, height: 5) }
+                        }
+                    }
+                }
+                .frame(width: 360, height: 203)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+                Text(hideSpoilers ? "Episode \(video.episode ?? 0)" : (video.title ?? "Episode \(video.episode ?? 0)"))
+                    .font(.system(size: 22, weight: .semibold)).lineLimit(1)
+                if progress.watched { Label("Watched", systemImage: "checkmark.circle.fill").foregroundStyle(accent) }
+            }
+            .frame(width: 360, alignment: .leading)
+        }
+        .buttonStyle(.card)
     }
 }
 
@@ -244,6 +446,10 @@ struct EpisodeRowTV: View {
     let onPlay: () -> Void
 
     @AppStorage(SubtitleStyle.Key.showEpisodeDesc) private var showEpisodeDesc = true
+    @AppStorage(SubtitleStyle.Key.hideSpoilers) private var hideSpoilers = false
+    @AppStorage(SubtitleStyle.Key.spoilerThumbnails) private var hideThumbnail = true
+    @AppStorage(SubtitleStyle.Key.accent) private var accentID = "green"
+    private var accent: Color { HarborSettings.accentColor(accentID) }
 
     var body: some View {
         Button(action: onPlay) {
@@ -256,6 +462,7 @@ struct EpisodeRowTV: View {
                     }
                     .frame(width: 300, height: 168)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .blur(radius: hideSpoilers && hideThumbnail ? 24 : 0)
 
                     // Episode-number badge.
                     if let e = video.episode {
@@ -268,10 +475,10 @@ struct EpisodeRowTV: View {
                     // Watched check.
                     if progress.watched {
                         Image(systemName: "checkmark")
-                            .font(.system(size: 14, weight: .heavy)).foregroundStyle(.green)
+                            .font(.system(size: 14, weight: .heavy)).foregroundStyle(accent)
                             .frame(width: 30, height: 30)
-                            .background(Circle().fill(.green.opacity(0.22)))
-                            .overlay(Circle().stroke(.green.opacity(0.5), lineWidth: 1))
+                            .background(Circle().fill(accent.opacity(0.22)))
+                            .overlay(Circle().stroke(accent.opacity(0.5), lineWidth: 1))
                             .frame(maxWidth: .infinity, alignment: .trailing)
                             .padding(8)
                     }
@@ -282,7 +489,7 @@ struct EpisodeRowTV: View {
                             GeometryReader { geo in
                                 ZStack(alignment: .leading) {
                                     Rectangle().fill(.black.opacity(0.55)).frame(height: 4)
-                                    Rectangle().fill(.green).frame(width: geo.size.width * progress.ratio, height: 4)
+                                    Rectangle().fill(accent).frame(width: geo.size.width * progress.ratio, height: 4)
                                 }
                             }
                             .frame(height: 4)
@@ -292,12 +499,12 @@ struct EpisodeRowTV: View {
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(video.title ?? "Episode \(video.episode ?? 0)")
+                    Text(hideSpoilers ? "Episode \(video.episode ?? 0)" : (video.title ?? "Episode \(video.episode ?? 0)"))
                         .font(.system(size: 26, weight: .semibold)).foregroundStyle(.white)
                         .lineLimit(1)
                     Text(metaLine)
                         .font(.system(size: 19)).foregroundStyle(.white.opacity(0.6))
-                    if showEpisodeDesc, let ov = video.overview, !ov.isEmpty {
+                    if showEpisodeDesc, !hideSpoilers, let ov = video.overview, !ov.isEmpty {
                         Text(ov)
                             .font(.system(size: 20)).foregroundStyle(.white.opacity(0.75))
                             .lineLimit(2)

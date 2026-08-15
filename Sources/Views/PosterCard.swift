@@ -7,6 +7,11 @@ import SwiftUI
 struct PosterCard: View {
     let item: MetaItem
     var width: CGFloat = 240
+    @AppStorage(SubtitleStyle.Key.posterScale) private var posterScale = 1.0
+    @AppStorage(SubtitleStyle.Key.posterRadius) private var posterRadius = 12.0
+    @AppStorage(SubtitleStyle.Key.reduceArtworkMotion) private var reduceArtworkMotion = false
+
+    private var cardWidth: CGFloat { width * posterScale }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -29,22 +34,27 @@ struct PosterCard: View {
                             }
                         }
                     }
-                    .frame(width: width, height: width * 3 / 2)
+                    .frame(width: cardWidth, height: cardWidth * 3 / 2)
+                    .clipShape(RoundedRectangle(cornerRadius: posterRadius, style: .continuous))
 
                     if let rating = item.imdbRating, !rating.isEmpty {
                         ImdbBadge(rating: rating)
                             .padding(10)
                     }
                 }
-                .frame(width: width, height: width * 3 / 2)
+                .frame(width: cardWidth, height: cardWidth * 3 / 2)
+                .clipShape(RoundedRectangle(cornerRadius: posterRadius, style: .continuous))
             }
             .buttonStyle(.card)
+            .transaction { transaction in
+                if reduceArtworkMotion { transaction.animation = nil }
+            }
 
             Text(item.name)
                 .font(.system(size: 20, weight: .medium))
                 .foregroundStyle(.white.opacity(0.9))
                 .lineLimit(1)
-                .frame(width: width, alignment: .leading)
+                .frame(width: cardWidth, alignment: .leading)
         }
     }
 }
@@ -74,6 +84,8 @@ struct ImdbBadge: View {
 struct ContinueCard: View {
     let entry: CwItem
     var width: CGFloat = 400
+    @AppStorage(SubtitleStyle.Key.accent) private var accent = "green"
+    @AppStorage(SubtitleStyle.Key.posterRadius) private var posterRadius = 12.0
 
     private var height: CGFloat { width * 9 / 16 }
 
@@ -90,6 +102,7 @@ struct ContinueCard: View {
                         }
                     }
                     .frame(width: width, height: height)
+                    .clipShape(RoundedRectangle(cornerRadius: posterRadius, style: .continuous))
 
                     LinearGradient(colors: [.clear, .black.opacity(0.75)],
                                    startPoint: .center, endPoint: .bottom)
@@ -118,7 +131,7 @@ struct ContinueCard: View {
                             GeometryReader { geo in
                                 ZStack(alignment: .leading) {
                                     Rectangle().fill(.white.opacity(0.25))
-                                    Rectangle().fill(.green)
+                                    Rectangle().fill(HarborSettings.accentColor(accent))
                                         .frame(width: geo.size.width * entry.progress)
                                 }
                             }
@@ -128,6 +141,7 @@ struct ContinueCard: View {
                     }
                 }
                 .frame(width: width, height: height)
+                .clipShape(RoundedRectangle(cornerRadius: posterRadius, style: .continuous))
             }
             .buttonStyle(.card)
 

@@ -1,39 +1,59 @@
-# Harbor for Apple TV (tvOS)
+# Harbor for Apple TV
 
-A **native SwiftUI** port of [Harbor](https://github.com/twintailer/harbor) for
-Apple TV. tvOS has no WebKit/WKWebView, so the Tauri + React app that powers the
-iPhone/desktop builds cannot run here — this is a ground-up native rewrite using
-the tvOS focus engine, sharing Harbor's data sources (Stremio addons / Cinemeta).
+A native SwiftUI port of Harbor for tvOS. Apple TV does not provide WebKit, so
+the Tauri/React shell used on Windows and Android cannot run here. The tvOS app
+recreates Harbor with the tvOS focus engine and a native MPVKit player while
+using the same Stremio account, add-on, catalog, metadata and stream APIs.
 
-## Status — v0.1 (foundation)
+## Current feature set — 0.2
 
-- Home: focus-navigable poster rows (Trending / Top rated) from Cinemeta
-- Discover: type + genre browsing grid
-- Search: live movie/series search
-- Detail: backdrop, metadata, episode list
-- Player: native AVKit (AVPlayer) — currently plays a public HLS test stream;
-  the real addon/debrid stream resolver lands in a later round
+- Harbor navigation: Home, Discover, Catalogs, Movies, Series, Anime, Library,
+  Add-ons, Search and Settings
+- Stremio sign-in, add-on sync, catalog browsing, library/history and Continue
+  Watching
+- Stream resolution through the user's installed Stremio add-ons, remembered
+  sources, Harbor ranking and safety filtering
+- MPVKit-GPL playback for HLS, MKV, HDR, multichannel audio and embedded tracks
+- Resume/progress sync, next-episode playback, independent seek steps, playback
+  speed, audio/subtitle selection and aspect controls
+- tvOS-native settings in the same group order as Harbor desktop/Android:
+  library, streaming, player, video tuning, Anime4K, player layout, languages,
+  theme and advanced
+- Anime4K GLSL shaders bundled from a pinned upstream revision, with Harbor's
+  modes and performance/high-quality tiers
+- Session tokens stored in the tvOS Keychain
+
+Desktop-only concepts such as hotkeys, system tray behavior, native title bars,
+download-folder pickers and Discord Rich Presence are intentionally excluded.
+Raw torrent/magnet playback still requires a debrid/direct URL from a stream
+add-on; Apple TV does not run Harbor's desktop torrent engine.
 
 ## Build
 
-CI builds an **unsigned** tvOS IPA on a macOS runner:
+The GitHub workflow builds an unsigned tvOS IPA on a macOS runner:
 
-```
+```sh
 gh workflow run tvos-build.yml
 ```
 
-Artifact: `harbor-tvos` → `Harbor_tvOS_0.1.0_unsigned.ipa`.
+Artifact: `harbor-tvos` → `Harbor_tvOS_0.2.0_unsigned.ipa`.
+
+For a local build on macOS, install Pillow and XcodeGen, then run
+`python3 scripts/generate-assets.py`, `bash scripts/fetch-anime4k.sh` and
+`xcodegen generate`. Resolve the MPVKit package and build the `HarborTV` scheme
+for Apple TV.
 
 ## Installing on Apple TV
 
-Sideloading tvOS is harder than iPhone — there is no AltStore for tvOS. You need
-**Xcode on a Mac** with the Apple TV paired (Xcode → Window → Devices and
-Simulators → your Apple TV → install the app), which re-signs it with your Apple
-ID. A free Apple ID works but the app expires after 7 days, same as iOS.
+Pair the Apple TV with Xcode using Window → Devices and Simulators, then install
+the built app after signing it with your Apple ID or development team. An
+unsigned CI artifact must be re-signed before it can be installed.
 
-## Roadmap
+## Remaining parity work
 
-1. User's installed Stremio addons (not just Cinemeta)
-2. Stream resolution (Torrentio / debrid) + real playback
-3. Watch progress / library sync
-4. Subtitles, audio tracks, next-episode
+- Native OAuth/device-code flows for Trakt, AniList, MyAnimeList, Simkl and
+  Letterboxd
+- Harbor Relay / Watch Together and webhook automation settings
+- Remote P2P/server playback for torrent-only results
+- Calendar, live TV, playlists, downloads and profile/PIN management
+- Full metadata-provider configuration and richer stream-filter rule editing

@@ -11,6 +11,7 @@ struct HarborTVApp: App {
     @StateObject private var auth = AuthStore()
 
     init() {
+        HarborSettings.registerDefaults()
         // Category only — no setActive. The audio output driver activates the session when
         // it starts; a long-form .playback/.moviePlayback category is what tvOS expects
         // from a media app and is safe to declare up front.
@@ -25,18 +26,44 @@ struct HarborTVApp: App {
 }
 
 struct RootView: View {
+    @AppStorage(SubtitleStyle.Key.accent) private var accent = "green"
+    @AppStorage(SubtitleStyle.Key.background) private var background = "harbor"
+
     var body: some View {
-        TabView {
-            HomeView()
-                .tabItem { Label("Home", systemImage: "house") }
-            DiscoverView()
-                .tabItem { Label("Discover", systemImage: "square.grid.2x2") }
-            SearchView()
-                .tabItem { Label("Search", systemImage: "magnifyingglass") }
-            ProfileView()
-                .tabItem { Label("Account", systemImage: "person.crop.circle") }
-            SettingsView()
-                .tabItem { Label("Settings", systemImage: "gearshape") }
+        ZStack {
+            backgroundColor.ignoresSafeArea()
+            TabView {
+                HomeView()
+                    .tabItem { Label("Home", systemImage: "house.fill") }
+                DiscoverView()
+                    .tabItem { Label("Discover", systemImage: "safari.fill") }
+                CatalogsView()
+                    .tabItem { Label("Catalogs", systemImage: "square.grid.2x2.fill") }
+                MediaBrowseView(title: "Movies", type: "movie")
+                    .tabItem { Label("Movies", systemImage: "film.fill") }
+                MediaBrowseView(title: "Series", type: "series")
+                    .tabItem { Label("Series", systemImage: "tv.fill") }
+                MediaBrowseView(title: "Anime", type: "anime", fallbackGenre: "Animation")
+                    .tabItem { Label("Anime", systemImage: "sparkles") }
+                LibraryView()
+                    .tabItem { Label("Library", systemImage: "books.vertical.fill") }
+                AddonsView()
+                    .tabItem { Label("Add-ons", systemImage: "puzzlepiece.extension.fill") }
+                SearchView()
+                    .tabItem { Label("Search", systemImage: "magnifyingglass") }
+                SettingsView()
+                    .tabItem { Label("Settings", systemImage: "gearshape.fill") }
+            }
+            .tint(HarborSettings.accentColor(accent))
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private var backgroundColor: Color {
+        switch background {
+        case "oled": return .black
+        case "system": return Color(uiColor: .systemBackground)
+        default: return Color(red: 0.035, green: 0.047, blue: 0.065)
         }
     }
 }

@@ -5,4 +5,6 @@ DerivedData/
 *.ipa
 Payload/
 Assets.xcassets/
+Resources/Anime4K/*.glsl
+Resources/Anime4K/LICENSE-Anime4K
 StremioX-main/

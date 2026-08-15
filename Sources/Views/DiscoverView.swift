@@ -51,20 +51,34 @@ struct DiscoverView: View {
             }
             .navigationDestination(for: MetaItem.self) { DetailView(item: $0) }
         }
-        .task(id: "\(type)-\(genre)") { await load() }
+        .task(id: "\(type)-\(genre)-\(addonRevision)") { await load() }
     }
 
     @EnvironmentObject private var auth: AuthStore
 
+    private var addonRevision: String {
+        auth.addons.map(\.transportUrl).joined(separator: "|")
+    }
+
     private func load() async {
         loading = true
         // Use a catalog addon that serves this type, else Cinemeta.
-        let addon = auth.addons.first {
-            !($0.manifest?.catalogs ?? []).isEmpty && ($0.manifest?.types?.contains(type) ?? false)
+        let choice: (Addon, Addon.CatalogDef)? = auth.addons.lazy.compactMap { addon in
+            guard let catalog = addon.manifest?.catalogs?.first(where: { $0.type == type }) else { return nil }
+            return (addon, catalog)
+        }.first
+        let result: [MetaItem]
+        if let (addon, catalog) = choice {
+            let addonItems = await AddonService.catalog(
+                base: addon.base, type: type, id: catalog.id, genre: genre)
+            if addonItems.isEmpty {
+                result = await CatalogService.catalog(type: type, id: "top", genre: genre)
+            } else {
+                result = addonItems
+            }
+        } else {
+            result = await CatalogService.catalog(type: type, id: "top", genre: genre)
         }
-        let base = addon?.base ?? CatalogService.cinemeta
-        let catId = addon?.manifest?.catalogs?.first { $0.type == type }?.id ?? "top"
-        let result = await AddonService.catalog(base: base, type: type, id: catId, genre: genre)
         await MainActor.run { items = result; loading = false }
     }
 }

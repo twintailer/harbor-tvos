@@ -4,6 +4,7 @@ struct HomeView: View {
     @EnvironmentObject private var auth: AuthStore
     @State private var rows: [CatalogRow] = []
     @State private var loading = true
+    @AppStorage(SubtitleStyle.Key.homeShowAllRows) private var showAllRows = false
 
     var body: some View {
         NavigationStack {
@@ -30,11 +31,16 @@ struct HomeView: View {
             }
         }
         // Rebuild rows when the signed-in addons change.
-        .task(id: auth.addons.count) {
+        .task(id: "\(addonRevision)-\(showAllRows)") {
+            await auth.loadLibrary()
             await auth.loadContinueWatching()
             rows = await AddonService.homeRows(addons: auth.addons)
             loading = false
         }
+    }
+
+    private var addonRevision: String {
+        auth.addons.map(\.transportUrl).joined(separator: "|")
     }
 }
 
@@ -61,15 +67,33 @@ struct ContinueRowView: View {
 
 struct CatalogRowView: View {
     let row: CatalogRow
+    @EnvironmentObject private var auth: AuthStore
+    @AppStorage(SubtitleStyle.Key.rowTitleScale) private var titleScale = 1.0
+    @AppStorage(SubtitleStyle.Key.hideWatched) private var hideWatched = false
+    @AppStorage(SubtitleStyle.Key.hideUnreleased) private var hideUnreleased = false
+
+    private var visibleItems: [MetaItem] {
+        let watched = Set(auth.libraryItems.filter {
+            ($0.state?.flaggedWatched ?? 0) > 0 || $0.progressRatio >= 0.9
+        }.map(\._id))
+        let currentYear = Calendar.current.component(.year, from: Date())
+        return row.items.filter { item in
+            if hideWatched && watched.contains(item.id) { return false }
+            if hideUnreleased,
+               let text = item.releaseInfo,
+               let year = Int(text.prefix(4)), year > currentYear { return false }
+            return true
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(row.title)
-                .font(.system(size: 30, weight: .semibold))
+                .font(.system(size: 30 * titleScale, weight: .semibold))
                 .padding(.horizontal, 60)
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: 32) {
-                    ForEach(row.items) { item in
+                    ForEach(visibleItems) { item in
                         PosterCard(item: item)
                     }
                 }

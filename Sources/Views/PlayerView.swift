@@ -5,6 +5,11 @@ struct PlayerTarget: Identifiable {
     let id = UUID()
     let title: String
     let url: URL
+    var startAt: Double = 0
+    var isAnime: Bool = false
+    var requestHeaders: [String: String] = [:]
+    var onProgress: ((Double, Double) -> Void)? = nil
+    var onEnded: (() -> Void)? = nil
 }
 
 /// Full-screen libmpv player for tvOS. ALL remote input is handled at the UIKit level by a focusable
@@ -15,8 +20,6 @@ struct PlayerView: View {
     let target: PlayerTarget
     @Environment(\.dismiss) private var dismiss
     @StateObject private var model = PlayerModel()
-
-    private let accent = Color.green
 
     @State private var showInfo = true
     @State private var hideTask: Task<Void, Never>?
@@ -30,6 +33,12 @@ struct PlayerView: View {
     @State private var audioOut = ""
     @State private var appliedAutoTracks = false
     @State private var lastTrackRefresh = Date.distantPast
+    @State private var animeActive = false
+    @State private var confirmingLeave = false
+    @State private var handledEnd = false
+    @State private var lastSavedPosition = 0.0
+    @State private var subtitleDelay = 0.0
+    @State private var audioDelay = 0.0
 
     // Scrub-to-seek
     @State private var scrubbing = false
@@ -45,11 +54,23 @@ struct PlayerView: View {
     @AppStorage(SubtitleStyle.Key.subLang) private var prefSubLang = ""
     @AppStorage(SubtitleStyle.Key.audioLang) private var prefAudioLang = ""
     @AppStorage(SubtitleStyle.Key.subsOff) private var subsOffByDefault = false
+    @AppStorage(SubtitleStyle.Key.preferEmbedded) private var preferEmbedded = false
     @AppStorage(SubtitleStyle.Key.defaultSpeed) private var defaultSpeed = 1.0
-    @AppStorage(SubtitleStyle.Key.seekStep) private var seekStep = 10
+    @AppStorage(SubtitleStyle.Key.seekBackStep) private var seekBackStep = 10
+    @AppStorage(SubtitleStyle.Key.seekForwardStep) private var seekForwardStep = 10
+    @AppStorage(SubtitleStyle.Key.controlsHideSeconds) private var controlsHideSeconds = 5
+    @AppStorage(SubtitleStyle.Key.showQualityInfo) private var showQualityInfo = true
+    @AppStorage(SubtitleStyle.Key.playerTitleScale) private var playerTitleScale = 1.0
+    @AppStorage(SubtitleStyle.Key.confirmLeave) private var confirmLeave = true
+    @AppStorage(SubtitleStyle.Key.autoPlayNext) private var autoPlayNext = true
+    @AppStorage(SubtitleStyle.Key.accent) private var accentID = "green"
+    @AppStorage(SubtitleStyle.Key.anime4KEnabled) private var anime4KEnabled = false
+    @AppStorage(SubtitleStyle.Key.anime4KAnimeOnly) private var anime4KAnimeOnly = true
+    @AppStorage(SubtitleStyle.Key.anime4KIndicator) private var anime4KIndicator = true
+    @AppStorage(SubtitleStyle.Key.anime4KMode) private var anime4KMode = "A"
 
-    private enum Control: Hashable { case scrub, restart, back, play, fwd, audio, subs, aspect, speed }
-    private enum PanelKind { case audio, subtitles, subtitleSettings, aspect, speed, debug }
+    private enum Control: Hashable { case scrub, restart, back, play, fwd, audio, subs, aspect, speed, anime }
+    private enum PanelKind { case audio, subtitles, subtitleSettings, aspect, speed, anime, debug }
     @State private var selected: Control = .play
     @State private var lastButton: Control = .play
     @State private var speed: Double = 1.0
@@ -57,12 +78,22 @@ struct PlayerView: View {
     private let speeds: [Double] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
 
     private var controlsHidden: Bool { !showInfo && !showOptions }
+    private var accent: Color { HarborSettings.accentColor(accentID) }
+    private var animeAvailable: Bool {
+        let nested = Bundle.main.urls(forResourcesWithExtension: "glsl", subdirectory: "Anime4K") ?? []
+        let root = Bundle.main.urls(forResourcesWithExtension: "glsl", subdirectory: nil) ?? []
+        return Set(nested + root).count >= 11
+    }
+    private var shouldStartAnime4K: Bool {
+        anime4KEnabled && animeAvailable && (!anime4KAnimeOnly || target.isAnime)
+    }
 
     var body: some View {
         ZStack(alignment: .bottom) {
             Color.black.ignoresSafeArea()
 
-            MPVPlayerView(url: target.url, model: model)
+            MPVPlayerView(url: target.url, model: model, startAt: target.startAt,
+                          anime4K: shouldStartAnime4K, requestHeaders: target.requestHeaders)
                 .ignoresSafeArea()
 
             // UIKit owns ALL remote input.
@@ -74,16 +105,49 @@ struct PlayerView: View {
             }
             if showInfo && !showOptions { controlBar }
             if showOptions { optionsPanel }
+            if animeActive && anime4KIndicator {
+                VStack {
+                    HStack {
+                        Spacer()
+                        Label("Anime4K", systemImage: "sparkles")
+                            .font(.system(size: 17, weight: .bold))
+                            .padding(.horizontal, 13).padding(.vertical, 7)
+                            .background(Capsule().fill(.black.opacity(0.7)))
+                            .foregroundStyle(accent)
+                    }
+                    Spacer()
+                }
+                .padding(34)
+            }
         }
         .onReceive(model.$ready) { if $0 { refreshTracksSoon() } }
-        .onReceive(model.$position) { _ in maybeAutoSelectTracks() }
+        .onReceive(model.$position) { position in
+            maybeAutoSelectTracks()
+            if model.duration > 0, position > 0, abs(position - lastSavedPosition) >= 30 {
+                lastSavedPosition = position
+                target.onProgress?(position, model.duration)
+            }
+        }
+        .onReceive(model.$ended) { ended in
+            guard ended, !handledEnd else { return }
+            handledEnd = true
+            target.onProgress?(model.duration, model.duration)
+            if autoPlayNext, let onEnded = target.onEnded { onEnded() }
+            dismiss()
+        }
         .onAppear {
             showInfo = true; selected = .play; scheduleHide()
+            animeActive = shouldStartAnime4K
             UIApplication.shared.isIdleTimerDisabled = true
         }
         .onDisappear {
             hideTask?.cancel(); scrubCommit?.cancel()
+            if !handledEnd { target.onProgress?(model.position, model.duration) }
             UIApplication.shared.isIdleTimerDisabled = false
+        }
+        .confirmationDialog("Leave playback?", isPresented: $confirmingLeave, titleVisibility: .visible) {
+            Button("Leave Playback", role: .destructive) { dismiss() }
+            Button("Keep Watching", role: .cancel) { scheduleHide() }
         }
     }
 
@@ -107,7 +171,7 @@ struct PlayerView: View {
         }
         if controlsHidden {
             switch type {
-            case .menu: dismiss()
+            case .menu: requestDismiss()
             case .playPause: toggle()
             default: showControls()
             }
@@ -116,7 +180,7 @@ struct PlayerView: View {
         // Bar shown: 2D navigation.
         switch type {
         case .menu:
-            if scrubbing { cancelScrub() } else { dismiss() }
+            if scrubbing { cancelScrub() } else { requestDismiss() }
         case .playPause: toggle()
         case .select: activate(selected)
         case .leftArrow: horizontal(-1)
@@ -131,8 +195,9 @@ struct PlayerView: View {
         var c: [Control] = [.restart, .back, .play, .fwd]
         if !audioTracks.isEmpty { c.append(.audio) }
         c.append(.subs)
-        c.append(.aspect)
         c.append(.speed)
+        c.append(.aspect)
+        if animeAvailable { c.append(.anime) }
         return c
     }
 
@@ -162,13 +227,14 @@ struct PlayerView: View {
         switch c {
         case .scrub:   scrubbing ? commitScrub() : toggle()
         case .restart: restart()
-        case .back:    seek(-Double(seekStep))
-        case .fwd:     seek(Double(seekStep))
+        case .back:    seek(-Double(seekBackStep))
+        case .fwd:     seek(Double(seekForwardStep))
         case .play:    toggle()
         case .audio:   openPanel(.audio)
         case .subs:    openPanel(.subtitles)
         case .aspect:  openPanel(.aspect)
         case .speed:   openPanel(.speed)
+        case .anime:   openPanel(.anime)
         }
     }
 
@@ -176,18 +242,18 @@ struct PlayerView: View {
 
     private var metadataLine: String {
         var parts: [String] = []
-        switch videoHeight {
+        if showQualityInfo { switch videoHeight {
         case 2000...:     parts.append("4K")
         case 1300..<2000: parts.append("1440p")
         case 900..<1300:  parts.append("1080p")
         case 600..<900:   parts.append("720p")
         case 1..<600:     parts.append("\(videoHeight)p")
         default:          break
-        }
-        if !audioCodec.isEmpty { parts.append(audioCodec.uppercased()) }
+        } }
+        if showQualityInfo, !audioCodec.isEmpty { parts.append(audioCodec.uppercased()) }
         if abs(speed - 1.0) > 0.01 { parts.append(String(format: "%gx", speed)) }
         // Audio-output diagnostic: which driver is actually producing sound ("AO —" = none).
-        parts.append(audioOut.isEmpty ? "AO —" : "AO \(audioOut)")
+        if showQualityInfo { parts.append(audioOut.isEmpty ? "AO —" : "AO \(audioOut)") }
         return parts.joined(separator: "  ·  ")
     }
 
@@ -200,7 +266,7 @@ struct PlayerView: View {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 4) {
                     if !target.title.isEmpty {
-                        Text(target.title).font(.system(size: 28, weight: .semibold))
+                        Text(target.title).font(.system(size: 28 * playerTitleScale, weight: .semibold))
                             .foregroundStyle(.white).lineLimit(1)
                     }
                     if !metadataLine.isEmpty {
@@ -218,9 +284,9 @@ struct PlayerView: View {
                 HStack {
                     HStack(spacing: 18) {
                         ctrlButton(.restart, "arrow.counterclockwise")
-                        ctrlButton(.back, "gobackward.\(seekStep)")
+                        ctrlButton(.back, "gobackward.\(seekBackStep)")
                         ctrlButton(.play, model.paused ? "play.fill" : "pause.fill", big: true)
-                        ctrlButton(.fwd, "goforward.\(seekStep)")
+                        ctrlButton(.fwd, "goforward.\(seekForwardStep)")
                     }
                     Spacer()
                     HStack(spacing: 18) {
@@ -228,6 +294,7 @@ struct PlayerView: View {
                         ctrlButton(.subs, "captions.bubble")
                         ctrlButton(.speed, "speedometer")
                         ctrlButton(.aspect, "aspectratio")
+                        if animeAvailable { ctrlButton(.anime, "sparkles") }
                     }
                 }
             }
@@ -289,13 +356,22 @@ struct PlayerView: View {
     private var optionRows: [OptionRow] {
         switch panelKind {
         case .audio:
-            return groupedTrackRows(audioTracks) { setAudio($0) }
+            var rows = groupedTrackRows(audioTracks) { setAudio($0) }
+            rows.append(OptionRow(label: "Audio sync", detail: String(format: "%+.1fs", audioDelay), isHeader: true))
+            rows.append(OptionRow(label: "Audio 0.1s earlier") { audioDelay -= 0.1; model.controller?.setAudioDelay(audioDelay) })
+            rows.append(OptionRow(label: "Reset audio sync") { audioDelay = 0; model.controller?.setAudioDelay(0) })
+            rows.append(OptionRow(label: "Audio 0.1s later") { audioDelay += 0.1; model.controller?.setAudioDelay(audioDelay) })
+            return rows
         case .subtitles:
             var rows = [OptionRow(label: "Off", isSelected: subtitleTracks.allSatisfy { !$0.selected }) {
                 model.controller?.setSubtitleTrack(-1); refreshTracksSoon()
             }]
             rows += groupedTrackRows(subtitleTracks) { setSub($0) }
             rows.append(OptionRow(label: "Subtitle Settings", detail: "›") { openPanel(.subtitleSettings) })
+            rows.append(OptionRow(label: "Subtitle sync", detail: String(format: "%+.1fs", subtitleDelay), isHeader: true))
+            rows.append(OptionRow(label: "Subtitles 0.1s earlier") { subtitleDelay -= 0.1; model.controller?.setSubDelay(subtitleDelay) })
+            rows.append(OptionRow(label: "Reset subtitle sync") { subtitleDelay = 0; model.controller?.setSubDelay(0) })
+            rows.append(OptionRow(label: "Subtitles 0.1s later") { subtitleDelay += 0.1; model.controller?.setSubDelay(subtitleDelay) })
             return rows
         case .subtitleSettings:
             var rows: [OptionRow] = [OptionRow(label: "Size", isHeader: true)]
@@ -328,6 +404,20 @@ struct PlayerView: View {
                     speed = s; model.controller?.setSpeed(s)
                 }
             }
+        case .anime:
+            var rows = [OptionRow(label: "Off", isSelected: !animeActive) {
+                animeActive = false
+                model.controller?.setAnime4K(false)
+            }]
+            rows += HarborSettings.animeModes.map { choice in
+                OptionRow(label: choice.label, detail: choice.detail,
+                          isSelected: animeActive && anime4KMode == choice.id) {
+                    anime4KMode = choice.id
+                    animeActive = true
+                    model.controller?.setAnime4K(true)
+                }
+            }
+            return rows
         }
     }
 
@@ -362,6 +452,7 @@ struct PlayerView: View {
         case .subtitleSettings: return "Subtitle Settings"
         case .aspect: return "Aspect Ratio"
         case .speed: return "Playback Speed"
+        case .anime: return "Anime4K"
         case .debug: return "Debug"
         }
     }
@@ -475,7 +566,10 @@ struct PlayerView: View {
         // Subtitles: off by default, or preferred language.
         if subsOffByDefault {
             model.controller?.setSubtitleTrack(-1)
-        } else if !prefSubLang.isEmpty, let s = subtitleTracks.first(where: { $0.lang.lowercased().hasPrefix(prefSubLang) }) {
+        } else if !prefSubLang.isEmpty,
+                  let s = subtitleTracks.first(where: {
+                      $0.lang.lowercased().hasPrefix(prefSubLang) && (!preferEmbedded || !$0.external)
+                  }) ?? subtitleTracks.first(where: { $0.lang.lowercased().hasPrefix(prefSubLang) }) {
             model.controller?.setSubtitleTrack(s.id)
         }
         refreshTracksSoon()
@@ -529,8 +623,9 @@ struct PlayerView: View {
     private func cancelScrub() { scrubCommit?.cancel(); scrubbing = false; flashControls() }
 
     private func showControls() {
+        let wasHidden = controlsHidden
         withAnimation { showInfo = true }
-        if controlsHidden { selected = .play }
+        if wasHidden { selected = .play }
         scheduleHide()
     }
     private func flashControls() {
@@ -539,10 +634,20 @@ struct PlayerView: View {
     }
     private func scheduleHide() {
         hideTask?.cancel()
+        guard controlsHideSeconds > 0 else { return }
         hideTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            try? await Task.sleep(nanoseconds: UInt64(controlsHideSeconds) * 1_000_000_000)
             guard !Task.isCancelled, !showOptions else { return }
             withAnimation { showInfo = false }
+        }
+    }
+
+    private func requestDismiss() {
+        if confirmLeave && model.ready && model.position > 5 && !model.ended {
+            hideTask?.cancel()
+            confirmingLeave = true
+        } else {
+            dismiss()
         }
     }
 

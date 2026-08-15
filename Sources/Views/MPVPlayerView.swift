@@ -10,9 +10,13 @@ import os
 struct MPVPlayerView: UIViewControllerRepresentable {
     let url: URL
     let model: PlayerModel
+    var startAt: Double = 0
+    var anime4K: Bool = false
+    var requestHeaders: [String: String] = [:]
 
     func makeUIViewController(context: Context) -> MPVViewController {
-        let vc = MPVViewController(url: url, model: model)
+        let vc = MPVViewController(url: url, model: model, startAt: startAt,
+                                   anime4K: anime4K, requestHeaders: requestHeaders)
         model.controller = vc
         return vc
     }
@@ -29,20 +33,28 @@ struct MPVTrack: Identifiable, Hashable {
     let title: String
     let lang: String
     let selected: Bool
+    let external: Bool
 }
 
 final class MPVViewController: UIViewController {
     private var mpv: OpaquePointer?
     private let url: URL
     private weak var model: PlayerModel?
+    private let startAt: Double
+    private let requestHeaders: [String: String]
+    private(set) var anime4KActive: Bool
     private var metalLayer: CAMetalLayer?
     private var poll: Timer?
     private let mpvQueue = DispatchQueue(label: "app.harbor.tvos.mpv")
     private let log = Logger(subsystem: "app.harbor.tvos", category: "mpv")
 
-    init(url: URL, model: PlayerModel) {
+    init(url: URL, model: PlayerModel, startAt: Double, anime4K: Bool,
+         requestHeaders: [String: String]) {
         self.url = url
         self.model = model
+        self.startAt = startAt
+        self.anime4KActive = anime4K
+        self.requestHeaders = requestHeaders
         super.init(nibName: nil, bundle: nil)
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -127,15 +139,32 @@ final class MPVViewController: UIViewController {
     private func setupMPV() {
         guard let layer = metalLayer, let ctx = mpv_create() else { return }
         mpv = ctx
-        // "fast" baseline for constrained GPUs, then our explicit options.
-        mpv_set_option_string(ctx, "profile", "fast")
+        // Tune the bundled mpv for the selected Apple TV quality profile.
+        let defaults = UserDefaults.standard
+        switch defaults.string(forKey: SubtitleStyle.Key.mpvQuality) ?? "balanced" {
+        case "quality":
+            mpv_set_option_string(ctx, "profile", "gpu-hq")
+            setOpt("scale", "ewa_lanczossharp")
+            setOpt("cscale", "ewa_lanczossoft")
+        case "performance":
+            mpv_set_option_string(ctx, "profile", "fast")
+            setOpt("scale", "bilinear")
+            setOpt("cscale", "bilinear")
+        default:
+            mpv_set_option_string(ctx, "profile", "fast")
+            setOpt("scale", "spline36")
+            setOpt("cscale", "spline36")
+        }
         mpv_request_log_messages(ctx, "warn")   // surfaced via the event loop below
         var wid = Int64(Int(bitPattern: Unmanaged.passUnretained(layer).toOpaque()))
         mpv_set_option(ctx, "wid", MPV_FORMAT_INT64, &wid)
         setOpt("vo", "gpu-next")
         setOpt("gpu-api", "vulkan")
         setOpt("gpu-context", "moltenvk")
-        setOpt("hwdec", "videotoolbox")
+        switch defaults.string(forKey: SubtitleStyle.Key.mpvHWDec) ?? "auto" {
+        case "off": setOpt("hwdec", "no")
+        default: setOpt("hwdec", "videotoolbox")
+        }
         setOpt("video-rotate", "no")
         // No `ao` override: with the MPVKit-GPL build the DEFAULT driver chain is the
         // proven-on-Apple-TV configuration (StremioX ships exactly this). Explicit lists
@@ -148,18 +177,26 @@ final class MPVViewController: UIViewController {
         setOpt("sub-auto", "fuzzy")
         for (name, value) in SubtitleStyle.mpvOptions { setOpt(name, value) }
         applyVideoSize(setOpt)
+        if startAt > 1 { setOpt("start", String(format: "%.3f", startAt)) }
         // Debrid/addon URLs prefer a browser UA; follow redirects; reconnect on drops.
         setOpt("user-agent",
                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1")
+        applyRequestHeaders()
         setOpt("network-timeout", "30")
         setOpt("stream-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_delay_max=7")
-        if UserDefaults.standard.bool(forKey: SubtitleStyle.Key.audioNormalize) {
-            setOpt("af", "dynaudnorm")   // loudness normalization (quiet dialogue / loud action)
-        }
+        applyAudioOptions(defaults)
+        applyPictureOptions(defaults)
+        if anime4KActive { applyAnime4K(setOpt) }
         setOpt("cache", "yes")
-        setOpt("demuxer-readahead-secs", "300")
-        setOpt("demuxer-max-bytes", "512MiB")
-        setOpt("demuxer-max-back-bytes", "64MiB")
+        if defaults.bool(forKey: SubtitleStyle.Key.mpvBufferBoost) {
+            setOpt("demuxer-readahead-secs", "300")
+            setOpt("demuxer-max-bytes", "512MiB")
+            setOpt("demuxer-max-back-bytes", "64MiB")
+        } else {
+            setOpt("demuxer-readahead-secs", "90")
+            setOpt("demuxer-max-bytes", "192MiB")
+            setOpt("demuxer-max-back-bytes", "32MiB")
+        }
         setOpt("keep-open", "yes")
         mpv_initialize(ctx)
 
@@ -203,6 +240,8 @@ final class MPVViewController: UIViewController {
                         if ef.reason == MPV_END_FILE_REASON_ERROR {
                             let msg = String(cString: mpv_error_string(ef.error))
                             self.log.error("end-file error: \(msg, privacy: .public)")
+                        } else if ef.reason == MPV_END_FILE_REASON_EOF {
+                            DispatchQueue.main.async { [weak self] in self?.model?.ended = true }
                         }
                     }
                 default: break
@@ -252,7 +291,8 @@ final class MPVViewController: UIViewController {
                 type: type,
                 title: getString("track-list/\(i)/title") ?? "",
                 lang: getString("track-list/\(i)/lang") ?? "",
-                selected: getFlag("track-list/\(i)/selected")))
+                selected: getFlag("track-list/\(i)/selected"),
+                external: getFlag("track-list/\(i)/external")))
         }
         return result
     }
@@ -262,6 +302,19 @@ final class MPVViewController: UIViewController {
     func setSpeed(_ speed: Double) { mpvQueue.async { [weak self] in self?.setString("speed", String(format: "%.2f", speed)) } }
     func setSubDelay(_ s: Double) { mpvQueue.async { [weak self] in self?.setString("sub-delay", String(format: "%.2f", s)) } }
     func setAudioDelay(_ s: Double) { mpvQueue.async { [weak self] in self?.setString("audio-delay", String(format: "%.2f", s)) } }
+
+    func setAnime4K(_ enabled: Bool) {
+        anime4KActive = enabled
+        mpvQueue.async { [weak self] in
+            guard let self else { return }
+            if enabled {
+                let chain = Anime4KShaders.chain()
+                self.setString("glsl-shaders", chain.map(\.path).joined(separator: ":"))
+            } else {
+                self.setString("glsl-shaders", "")
+            }
+        }
+    }
 
     /// Media summary for the metadata line: encoded video height, active audio codec, and the
     /// audio-output driver actually in use ("" = audio failed to initialize — the key diagnostic
@@ -288,6 +341,58 @@ final class MPVViewController: UIViewController {
         }
     }
 
+    private func applyAudioOptions(_ defaults: UserDefaults) {
+        var filters: [String] = []
+        if defaults.bool(forKey: SubtitleStyle.Key.audioNormalize) { filters.append("dynaudnorm") }
+        switch defaults.string(forKey: SubtitleStyle.Key.audioProfile) ?? "off" {
+        case "voice": filters.append("lavfi=[equalizer=f=3000:t=q:w=1:g=4]")
+        case "night": filters.append("lavfi=[acompressor=threshold=-18dB:ratio=4:attack=20:release=250]")
+        case "bass": filters.append("lavfi=[bass=g=5]")
+        case "bass-reduce": filters.append("lavfi=[bass=g=-6]")
+        default: break
+        }
+        if !filters.isEmpty { setOpt("af", filters.joined(separator: ",")) }
+        if defaults.bool(forKey: SubtitleStyle.Key.mpvDownmix) { setOpt("audio-channels", "stereo") }
+    }
+
+    private func applyRequestHeaders() {
+        var fields: [String] = []
+        for (key, value) in requestHeaders {
+            if key.caseInsensitiveCompare("User-Agent") == .orderedSame {
+                setOpt("user-agent", value)
+            } else {
+                fields.append("\(key): \(value)")
+            }
+        }
+        if !fields.isEmpty { setOpt("http-header-fields", fields.joined(separator: ",")) }
+    }
+
+    private func applyPictureOptions(_ defaults: UserDefaults) {
+        for (key, option) in [
+            (SubtitleStyle.Key.brightness, "brightness"),
+            (SubtitleStyle.Key.contrast, "contrast"),
+            (SubtitleStyle.Key.saturation, "saturation"),
+            (SubtitleStyle.Key.gamma, "gamma"),
+        ] {
+            let value = defaults.double(forKey: key)
+            if abs(value) > 0.01 { setOpt(option, String(format: "%.0f", value)) }
+        }
+        let toneMapping = defaults.string(forKey: SubtitleStyle.Key.toneMapping) ?? "auto"
+        if toneMapping != "auto" { setOpt("tone-mapping", toneMapping) }
+        setOpt("target-colorspace-hint", "yes")
+        if defaults.bool(forKey: SubtitleStyle.Key.motionInterpolation) {
+            setOpt("video-sync", "display-resample")
+            setOpt("interpolation", "yes")
+            setOpt("tscale", "oversample")
+        }
+    }
+
+    private func applyAnime4K(_ set: (String, String) -> Void) {
+        let chain = Anime4KShaders.chain()
+        guard !chain.isEmpty else { anime4KActive = false; return }
+        set("glsl-shaders", chain.map(\.path).joined(separator: ":"))
+    }
+
     /// Re-apply subtitle appearance to a running player (after a settings change).
     func applySubtitleStyle() {
         mpvQueue.async { [weak self] in
@@ -308,5 +413,37 @@ final class MPVViewController: UIViewController {
             mpv_terminate_destroy(ctx)
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         }
+    }
+}
+
+private enum Anime4KShaders {
+    static func chain() -> [URL] {
+        let defaults = UserDefaults.standard
+        let tier = defaults.string(forKey: SubtitleStyle.Key.anime4KTier) ?? "fast"
+        let large = tier == "hq" ? "VL" : "M"
+        let mode = defaults.string(forKey: SubtitleStyle.Key.anime4KMode) ?? "A"
+        let clamp = "Anime4K_Clamp_Highlights.glsl"
+        let down2 = "Anime4K_AutoDownscalePre_x2.glsl"
+        let down4 = "Anime4K_AutoDownscalePre_x4.glsl"
+        let upscaleMedium = "Anime4K_Upscale_CNN_x2_M.glsl"
+        let restore = "Anime4K_Restore_CNN_\(large).glsl"
+        let restoreSoft = "Anime4K_Restore_CNN_Soft_\(large).glsl"
+        let upscale = "Anime4K_Upscale_CNN_x2_\(large).glsl"
+        let denoise = "Anime4K_Upscale_Denoise_CNN_x2_\(large).glsl"
+        let files: [String]
+        switch mode {
+        case "B": files = [clamp, restoreSoft, upscale, down2, down4, upscaleMedium]
+        case "C": files = [clamp, denoise, down2, down4, upscaleMedium]
+        case "A+A", "AA": files = [clamp, restore, upscale, "Anime4K_Restore_CNN_M.glsl", down2, down4, upscaleMedium]
+        case "B+B", "BB": files = [clamp, restoreSoft, upscale, down2, "Anime4K_Restore_CNN_Soft_M.glsl", down4, upscaleMedium]
+        case "C+A", "CA": files = [clamp, denoise, down2, down4, "Anime4K_Restore_CNN_M.glsl", upscaleMedium]
+        default: files = [clamp, restore, upscale, down2, down4, upscaleMedium]
+        }
+        let urls = files.compactMap { filename in
+            let name = filename.replacingOccurrences(of: ".glsl", with: "")
+            return Bundle.main.url(forResource: name, withExtension: "glsl", subdirectory: "Anime4K")
+                ?? Bundle.main.url(forResource: name, withExtension: "glsl")
+        }
+        return urls.count == files.count ? urls : []
     }
 }

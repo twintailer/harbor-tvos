@@ -15,6 +15,13 @@ using the same Stremio account, add-on, catalog, metadata and stream APIs.
   sources, Harbor ranking and safety filtering
 - MPVKit-GPL 1.0 playback for HLS, MKV, HDR, multichannel audio and embedded
   tracks, using the tvOS AVFoundation audio output with AudioUnit fallback
+- Left-side tvOS navigation matching Harbor's desktop sections instead of a
+  top tab strip
+- Reference-matched Liquid Glass player chrome with floating speed, subtitle,
+  audio, aspect and Anime4K menus
+- Skip Intro, Skip Recap and Skip Credits using AniSkip, TheIntroDB and media
+  chapters, including independent auto-skip controls
+- Optional torrent playback through a user-hosted TorrServer
 - Resume/progress sync, next-episode playback, independent seek steps, playback
   speed, audio/subtitle selection and aspect controls
 - tvOS-native settings in the same group order as Harbor desktop/Android:
@@ -37,7 +44,7 @@ The GitHub workflow builds an unsigned tvOS IPA on a macOS runner:
 gh workflow run tvos-build.yml
 ```
 
-Artifact: `harbor-tvos` → `Harbor_tvOS_0.2.2_unsigned.ipa`.
+Artifact: `harbor-tvos` → `Harbor_tvOS_0.3.0_unsigned.ipa`.
 
 For a local build on macOS, install Pillow and XcodeGen, then run
 `python3 scripts/generate-assets.py`, `bash scripts/fetch-anime4k.sh` and

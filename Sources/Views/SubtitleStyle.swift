@@ -24,6 +24,8 @@ enum SubtitleStyle {
         static let assOverride = "harbor.sub.assOverride"
         static let lineSpacing = "harbor.sub.lineSpacing"
         static let preferEmbedded = "harbor.pref.preferEmbeddedSubs"
+        static let secondarySubLang = "harbor.pref.secondarySubLang"
+        static let preferForcedSubs = "harbor.pref.preferForcedSubs"
         // language + track prefs
         static let subLang = "harbor.pref.subLang"
         static let audioLang = "harbor.pref.audioLang"
@@ -41,6 +43,12 @@ enum SubtitleStyle {
         static let seekForwardStep = "harbor.pref.seekForwardStep"
         static let audioProfile = "harbor.pref.audioProfile"
         static let confirmLeave = "harbor.pref.confirmLeave"
+        static let showSkipButton = "harbor.player.showSkipButton"
+        static let autoSkipIntro = "harbor.player.autoSkipIntro"
+        static let autoSkipRecap = "harbor.player.autoSkipRecap"
+        static let autoSkipOutro = "harbor.player.autoSkipOutro"
+        static let skipButtonHideSec = "harbor.player.skipButtonHideSec"
+        static let nextEpisodeLeadSec = "harbor.player.nextEpisodeLeadSec"
         // episode list
         static let episodeSort = "harbor.pref.episodeSort"
         static let showEpisodeDesc = "harbor.pref.showEpisodeDesc"
@@ -58,6 +66,8 @@ enum SubtitleStyle {
         static let fullStreamDescription = "harbor.stream.fullDescription"
         static let pickerShowFilename = "harbor.stream.showFilename"
         static let bandwidthMbps = "harbor.stream.bandwidthMbps"
+        static let torrServerEnabled = "harbor.p2p.torrServerEnabled"
+        static let torrServerURL = "harbor.p2p.torrServerURL"
         // mpv / picture
         static let mpvQuality = "harbor.mpv.quality"
         static let mpvHWDec = "harbor.mpv.hwdec"
@@ -79,6 +89,14 @@ enum SubtitleStyle {
         static let controlsHideSeconds = "harbor.player.controlsHideSeconds"
         static let showQualityInfo = "harbor.player.showQualityInfo"
         static let playerTitleScale = "harbor.player.titleScale"
+        static let showRestartButton = "harbor.player.showRestartButton"
+        static let showSeekButtons = "harbor.player.showSeekButtons"
+        static let showNextButton = "harbor.player.showNextButton"
+        static let showSpeedButton = "harbor.player.showSpeedButton"
+        static let showSubtitleButton = "harbor.player.showSubtitleButton"
+        static let showAudioButton = "harbor.player.showAudioButton"
+        static let showAspectButton = "harbor.player.showAspectButton"
+        static let showAnimeButton = "harbor.player.showAnimeButton"
         // appearance
         static let accent = "harbor.theme.accent"
         static let background = "harbor.theme.background"
@@ -368,6 +386,14 @@ enum HarborSettings {
             SubtitleStyle.Key.seekBackStep: 10,
             SubtitleStyle.Key.seekForwardStep: 10,
             SubtitleStyle.Key.confirmLeave: true,
+            SubtitleStyle.Key.secondarySubLang: "",
+            SubtitleStyle.Key.preferForcedSubs: false,
+            SubtitleStyle.Key.showSkipButton: true,
+            SubtitleStyle.Key.autoSkipIntro: false,
+            SubtitleStyle.Key.autoSkipRecap: false,
+            SubtitleStyle.Key.autoSkipOutro: false,
+            SubtitleStyle.Key.skipButtonHideSec: 10,
+            SubtitleStyle.Key.nextEpisodeLeadSec: -1,
             SubtitleStyle.Key.showEpisodeDesc: true,
             SubtitleStyle.Key.libraryBookmarkedOnly: true,
             SubtitleStyle.Key.homeShowAllRows: false,
@@ -375,6 +401,8 @@ enum HarborSettings {
             SubtitleStyle.Key.spoilerThumbnails: true,
             SubtitleStyle.Key.fullStreamDescription: true,
             SubtitleStyle.Key.pickerShowFilename: false,
+            SubtitleStyle.Key.torrServerEnabled: false,
+            SubtitleStyle.Key.torrServerURL: "http://192.168.1.10:8090",
             SubtitleStyle.Key.mpvBufferBoost: false,
             SubtitleStyle.Key.mpvDownmix: false,
             SubtitleStyle.Key.anime4KEnabled: false,
@@ -382,6 +410,14 @@ enum HarborSettings {
             SubtitleStyle.Key.anime4KIndicator: true,
             SubtitleStyle.Key.motionInterpolation: false,
             SubtitleStyle.Key.showQualityInfo: true,
+            SubtitleStyle.Key.showRestartButton: true,
+            SubtitleStyle.Key.showSeekButtons: true,
+            SubtitleStyle.Key.showNextButton: true,
+            SubtitleStyle.Key.showSpeedButton: true,
+            SubtitleStyle.Key.showSubtitleButton: true,
+            SubtitleStyle.Key.showAudioButton: true,
+            SubtitleStyle.Key.showAspectButton: true,
+            SubtitleStyle.Key.showAnimeButton: true,
             SubtitleStyle.Key.posterScale: 1.0,
             SubtitleStyle.Key.posterRadius: 12.0,
             SubtitleStyle.Key.rowTitleScale: 1.0,

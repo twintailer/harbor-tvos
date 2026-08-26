@@ -21,7 +21,7 @@ struct StreamsView: View {
                         onPick(s)
                     } label: {
                         HStack {
-                            Image(systemName: s.isPlayable ? "play.circle.fill" : "arrow.down.circle")
+                            Image(systemName: s.isPlayable ? "play.circle.fill" : (s.isResolvable ? "network" : "arrow.down.circle"))
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(s.displayName.isEmpty ? "Stream" : s.displayName)
                                     .font(.system(size: 26, weight: .medium))
@@ -40,14 +40,14 @@ struct StreamsView: View {
                                         .lineLimit(1)
                                 }
                                 if !s.isPlayable {
-                                    Text("Torrent — not playable on Apple TV yet")
+                                    Text(s.isResolvable ? "Torrent · plays through TorrServer" : "Torrent · configure TorrServer or debrid")
                                         .font(.system(size: 18)).foregroundStyle(.secondary)
                                 }
                             }
                             Spacer()
                         }
                     }
-                    .disabled(!s.isPlayable)
+                    .disabled(!s.isResolvable)
                 }
             }
             .navigationTitle("Streams — \(title)")

@@ -228,6 +228,7 @@ struct StreamOption: Codable, Identifiable {
         guard let u = url else { return false }
         return u.hasPrefix("http")
     }
+    var isResolvable: Bool { isPlayable || (infoHash != nil && TorrServerService.isConfigured) }
     var displayName: String {
         [name, title].compactMap { $0 }.joined(separator: "  ·  ")
             .replacingOccurrences(of: "\n", with: " ")

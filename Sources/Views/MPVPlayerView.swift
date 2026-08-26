@@ -352,6 +352,25 @@ final class MPVViewController: UIViewController {
                 getString("current-ao") ?? "")
     }
 
+    /// Named chapters exposed by mpv. They are also an offline source for Harbor's
+    /// Skip Intro / Recap / Credits feature when AniSkip or TheIntroDB has no match.
+    func chapters() -> [MediaChapter] {
+        guard mpv != nil else { return [] }
+        let count = getInt("chapter-list/count")
+        guard count > 0 else { return [] }
+        let duration = getDouble("duration")
+        var values: [(String, Double)] = []
+        for index in 0..<count {
+            let title = getString("chapter-list/\(index)/title") ?? ""
+            let start = getDouble("chapter-list/\(index)/time")
+            values.append((title, max(0, start)))
+        }
+        return values.enumerated().map { index, value in
+            let end = values.indices.contains(index + 1) ? values[index + 1].1 : duration
+            return MediaChapter(title: value.0, start: value.1, end: max(value.1, end))
+        }
+    }
+
     /// Re-open the AudioUnit output after a late HDMI/session route. The second-stage stereo
     /// fallback handles receivers that advertise a surround layout they cannot actually accept.
     func recoverAudioOutput(forceStereo: Bool) {

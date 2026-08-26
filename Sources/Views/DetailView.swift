@@ -13,6 +13,7 @@ struct DetailView: View {
     @State private var pendingTitle = ""
     @State private var pendingVideo: MetaItem.Video?
     @State private var changingBookmark = false
+    @State private var streamError: String?
     @AppStorage(SubtitleStyle.Key.instantPlay) private var instantPlay = true
     @AppStorage(SubtitleStyle.Key.rememberStream) private var rememberStream = true
     @AppStorage(SubtitleStyle.Key.resume) private var resumePlayback = true
@@ -34,10 +35,10 @@ struct DetailView: View {
                 resolving = false
                 let remembered = rememberStream
                     ? UserDefaults.standard.string(forKey: lastStreamKey(streamId))
-                        .flatMap { id in streams.first { $0.id == id && $0.isPlayable } }
+                        .flatMap { id in streams.first { $0.id == id && $0.isResolvable } }
                     : nil
-                if instantPlay, let first = remembered ?? streams.first(where: { $0.isPlayable }) {
-                    player = makeTarget(stream: first, streamId: streamId, title: title, video: video)
+                if instantPlay, let first = remembered ?? streams.first(where: { $0.isResolvable }) {
+                    open(stream: first, streamId: streamId, title: title, video: video)
                 } else {
                     pickerStreams = streams
                 }
@@ -127,11 +128,17 @@ struct DetailView: View {
             StreamsView(title: meta.name, streams: pickerStreams ?? []) { s in
                 pickerStreams = nil
                 if rememberStream { UserDefaults.standard.set(s.id, forKey: lastStreamKey(pendingStreamId)) }
-                player = makeTarget(stream: s, streamId: pendingStreamId,
-                                    title: pendingTitle.isEmpty ? meta.name : pendingTitle,
-                                    video: pendingVideo)
+                open(stream: s, streamId: pendingStreamId,
+                     title: pendingTitle.isEmpty ? meta.name : pendingTitle,
+                     video: pendingVideo)
             }
         }
+        .alert("Stream unavailable", isPresented: Binding(
+            get: { streamError != nil }, set: { if !$0 { streamError = nil } })) {
+                Button("OK", role: .cancel) { streamError = nil }
+            } message: {
+                Text(streamError ?? "The selected source could not be opened.")
+            }
         .task {
             if full == nil {
                 full = await AddonService.meta(addons: auth.addons, type: item.type, id: item.id)
@@ -226,9 +233,38 @@ struct DetailView: View {
         "harbor.lastStream.\(meta.id).\(streamId)"
     }
 
-    private func makeTarget(stream: StreamOption, streamId: String, title: String,
-                            video: MetaItem.Video?) -> PlayerTarget? {
-        guard let url = URL(string: stream.url ?? "") else { return nil }
+    private func open(stream: StreamOption, streamId: String, title: String,
+                      video: MetaItem.Video?) {
+        if let raw = stream.url, let url = URL(string: raw) {
+            player = makeTarget(stream: stream, resolvedURL: url, streamId: streamId,
+                                title: title, video: video)
+            return
+        }
+        guard let hash = stream.infoHash, TorrServerService.isConfigured else {
+            streamError = "This is a torrent-only source. Configure TorrServer in Settings → P2P & servers, or use a debrid-enabled add-on."
+            return
+        }
+        resolving = true
+        Task {
+            let result = await TorrServerService.resolve(infoHash: hash, season: video?.season,
+                                                         episode: video?.episode)
+            await MainActor.run {
+                resolving = false
+                switch result {
+                case .success(let url):
+                    player = makeTarget(stream: stream, resolvedURL: url, streamId: streamId,
+                                        title: title, video: video)
+                case .notConfigured:
+                    streamError = "TorrServer is not configured."
+                case .failed(let message):
+                    streamError = message
+                }
+            }
+        }
+    }
+
+    private func makeTarget(stream: StreamOption, resolvedURL url: URL, streamId: String,
+                            title: String, video: MetaItem.Video?) -> PlayerTarget {
         if rememberStream { UserDefaults.standard.set(stream.id, forKey: lastStreamKey(streamId)) }
         let state = libItem?.state
         let sameVideo = meta.type == "movie" || state?.video_id == streamId ||
@@ -257,6 +293,9 @@ struct DetailView: View {
             url: url,
             startAt: start,
             isAnime: isAnime,
+            contentID: meta.id,
+            season: video?.season,
+            episode: video?.episode,
             requestHeaders: stream.requestHeaders,
             onProgress: { position, duration in
                 guard let key = auth.authKey else { return }

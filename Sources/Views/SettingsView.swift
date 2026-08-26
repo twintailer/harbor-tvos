@@ -21,14 +21,35 @@ struct SettingsView: View {
                     NavigationLink { LibraryPanel() } label: {
                         settingsRow("Library & metadata", icon: "books.vertical")
                     }
+                    NavigationLink { AddonIntegrationPanel(service: "Trakt", aliases: ["trakt"]) } label: {
+                        settingsRow("Trakt", icon: "arrow.triangle.2.circlepath")
+                    }
+                    NavigationLink { AddonIntegrationPanel(service: "AniList", aliases: ["anilist"]) } label: {
+                        settingsRow("AniList", icon: "a.square")
+                    }
+                    NavigationLink { AddonIntegrationPanel(service: "MyAnimeList", aliases: ["myanimelist", "mal"]) } label: {
+                        settingsRow("MyAnimeList", icon: "m.square")
+                    }
+                    NavigationLink { AddonIntegrationPanel(service: "Simkl", aliases: ["simkl"]) } label: {
+                        settingsRow("Simkl", icon: "s.square")
+                    }
+                    NavigationLink { AddonIntegrationPanel(service: "Letterboxd", aliases: ["letterboxd", "stremboxd"]) } label: {
+                        settingsRow("Letterboxd", icon: "ellipsis")
+                    }
                 }
 
                 Section("Streaming") {
+                    NavigationLink { RelayPanel() } label: {
+                        settingsRow("Harbor Relay", icon: "antenna.radiowaves.left.and.right")
+                    }
                     NavigationLink { StreamingSourcesPanel() } label: {
                         settingsRow("Streaming sources", icon: "play.square.stack")
                     }
                     NavigationLink { StreamFiltersPanel() } label: {
                         settingsRow("Stream filters", icon: "line.3.horizontal.decrease.circle")
+                    }
+                    NavigationLink { P2PPanel() } label: {
+                        settingsRow("P2P & servers", icon: "server.rack")
                     }
                 }
 
@@ -159,6 +180,72 @@ private struct AccountPanel: View {
     }
 }
 
+private struct AddonIntegrationPanel: View {
+    @EnvironmentObject private var auth: AuthStore
+    let service: String
+    let aliases: [String]
+
+    private var matches: [Addon] {
+        auth.addons.filter { addon in
+            let value = [addon.manifest?.id, addon.manifest?.name, addon.transportUrl]
+                .compactMap { $0 }.joined(separator: " ").lowercased()
+            return aliases.contains(where: { value.contains($0) })
+        }
+    }
+
+    var body: some View {
+        List {
+            Section("Connection") {
+                LabeledContent("Status", value: matches.isEmpty ? "Not connected" : "Connected")
+                ForEach(matches, id: \.transportUrl) { addon in
+                    Label(addon.manifest?.name ?? service, systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                }
+                NavigationLink("Manage Stremio add-ons") { AddonsView() }
+            }
+            Section("How it works on Apple TV") {
+                SettingsHint("Harbor uses the account-enabled \(service) provider exposed through your synced Stremio add-ons. Connect or configure it once in Harbor desktop or its add-on page, then refresh Account on Apple TV.")
+            }
+        }
+        .navigationTitle(service)
+    }
+}
+
+private struct RelayPanel: View {
+    @AppStorage("harbor.relay.url") private var relayURL = "https://harbor.site"
+    @AppStorage("harbor.relay.nickname") private var nickname = "Apple TV"
+    @State private var result: String?
+
+    var body: some View {
+        List {
+            Section("Harbor Relay") {
+                TextField("Relay URL", text: $relayURL)
+                    .textContentType(.URL)
+                TextField("Display name", text: $nickname)
+                Button("Test relay") {
+                    result = nil
+                    Task {
+                        guard let url = URL(string: relayURL) else { result = "Invalid URL"; return }
+                        var request = URLRequest(url: url); request.httpMethod = "HEAD"
+                        do {
+                            let (_, rawResponse) = try await URLSession.shared.data(for: request)
+                            let response = rawResponse as? HTTPURLResponse
+                            result = response.map { (200..<500).contains($0.statusCode) ? "Reachable" : "Unavailable" } ?? "Unavailable"
+                        } catch {
+                            result = "Unavailable"
+                        }
+                    }
+                }
+                if let result { LabeledContent("Status", value: result) }
+            }
+            Section {
+                SettingsHint("Relay connection details are shared by Harbor's Watch Together workflow. Playback itself never depends on Relay.")
+            }
+        }
+        .navigationTitle("Harbor Relay")
+    }
+}
+
 // MARK: - Library & metadata
 
 private struct LibraryPanel: View {
@@ -282,6 +369,42 @@ private struct StreamFiltersPanel: View {
     }
 }
 
+private struct P2PPanel: View {
+    @AppStorage(SubtitleStyle.Key.torrServerEnabled) private var enabled = false
+    @AppStorage(SubtitleStyle.Key.torrServerURL) private var serverURL = "http://192.168.1.10:8090"
+    @State private var testing = false
+    @State private var testResult: String?
+
+    var body: some View {
+        List {
+            Section("TorrServer") {
+                Toggle("Enable P2P through TorrServer", isOn: $enabled)
+                TextField("Server URL", text: $serverURL)
+                    .textContentType(.URL)
+                    .disabled(!enabled)
+                Button(testing ? "Testing…" : "Test connection") {
+                    testing = true; testResult = nil
+                    Task {
+                        let okay = await TorrServerService.ping()
+                        await MainActor.run {
+                            testing = false
+                            testResult = okay ? "Connected" : "Couldn't reach TorrServer"
+                        }
+                    }
+                }
+                .disabled(!enabled || testing)
+                if let testResult {
+                    LabeledContent("Status", value: testResult)
+                }
+            }
+            Section("Apple TV P2P") {
+                SettingsHint("Apple TV cannot run a torrent engine locally. Harbor sends magnet sources to TorrServer on your computer, NAS or Raspberry Pi, selects the matching episode, then plays its HTTP stream through mpv. Debrid/direct sources remain preferred.")
+            }
+        }
+        .navigationTitle("P2P & servers")
+    }
+}
+
 // MARK: - Player & quality
 
 private struct PlayerPanel: View {
@@ -295,6 +418,12 @@ private struct PlayerPanel: View {
     @AppStorage(SubtitleStyle.Key.audioProfile) private var audioProfile = "off"
     @AppStorage(SubtitleStyle.Key.confirmLeave) private var confirmLeave = true
     @AppStorage(SubtitleStyle.Key.mpvHWDec) private var hwdec = "auto"
+    @AppStorage(SubtitleStyle.Key.showSkipButton) private var showSkipButton = true
+    @AppStorage(SubtitleStyle.Key.autoSkipIntro) private var autoSkipIntro = false
+    @AppStorage(SubtitleStyle.Key.autoSkipRecap) private var autoSkipRecap = false
+    @AppStorage(SubtitleStyle.Key.autoSkipOutro) private var autoSkipOutro = false
+    @AppStorage(SubtitleStyle.Key.skipButtonHideSec) private var skipButtonHideSec = 10
+    @AppStorage(SubtitleStyle.Key.nextEpisodeLeadSec) private var nextEpisodeLeadSec = -1
 
     var body: some View {
         List {
@@ -310,7 +439,6 @@ private struct PlayerPanel: View {
             }
             Section("Playback") {
                 Toggle("Resume playback", isOn: $resume)
-                Toggle("Auto-play next episode", isOn: $autoPlayNext)
                 Toggle("Confirm before leaving playback", isOn: $confirmLeave)
                 Picker("Default speed", selection: $defaultSpeed) {
                     ForEach(SubtitleStyle.speeds, id: \.self) { speed in
@@ -330,6 +458,34 @@ private struct PlayerPanel: View {
                     ForEach(HarborSettings.audioProfiles) { Text($0.label).tag($0.id) }
                 }
                 SettingsHint("Audio filters apply when the next video starts.")
+            }
+            Section("Skip intros & credits") {
+                Toggle("Show the Skip button", isOn: $showSkipButton)
+                Toggle("Auto-skip intros", isOn: $autoSkipIntro)
+                Toggle("Auto-skip recaps", isOn: $autoSkipRecap)
+                Toggle("Auto-skip credit outros", isOn: $autoSkipOutro)
+                if showSkipButton {
+                    Picker("Auto-hide Skip button", selection: $skipButtonHideSec) {
+                        Text("Off").tag(0)
+                        Text("5 seconds").tag(5)
+                        Text("10 seconds").tag(10)
+                        Text("15 seconds").tag(15)
+                        Text("30 seconds").tag(30)
+                    }
+                }
+                SettingsHint("Harbor combines AniSkip, TheIntroDB and named chapters in the video. Auto-skip runs once per segment; seeking back lets it play normally.")
+            }
+            Section("Next episode prompt") {
+                Picker("Show Up Next", selection: $nextEpisodeLeadSec) {
+                    Text("Automatic").tag(-1)
+                    Text("Off").tag(0)
+                    Text("30 seconds before end").tag(30)
+                    Text("45 seconds before end").tag(45)
+                    Text("1 minute before end").tag(60)
+                    Text("1.5 minutes before end").tag(90)
+                    Text("2 minutes before end").tag(120)
+                }
+                Toggle("Auto-play next episode", isOn: $autoPlayNext)
             }
         }
         .navigationTitle("Player & quality")
@@ -438,6 +594,14 @@ private struct PlayerLayoutPanel: View {
     @AppStorage(SubtitleStyle.Key.controlsHideSeconds) private var hideSeconds = 5
     @AppStorage(SubtitleStyle.Key.showQualityInfo) private var showQuality = true
     @AppStorage(SubtitleStyle.Key.playerTitleScale) private var titleScale = 1.0
+    @AppStorage(SubtitleStyle.Key.showRestartButton) private var showStop = true
+    @AppStorage(SubtitleStyle.Key.showSeekButtons) private var showSeek = true
+    @AppStorage(SubtitleStyle.Key.showNextButton) private var showNext = true
+    @AppStorage(SubtitleStyle.Key.showSpeedButton) private var showSpeed = true
+    @AppStorage(SubtitleStyle.Key.showSubtitleButton) private var showSubtitles = true
+    @AppStorage(SubtitleStyle.Key.showAudioButton) private var showAudio = true
+    @AppStorage(SubtitleStyle.Key.showAspectButton) private var showAspect = true
+    @AppStorage(SubtitleStyle.Key.showAnimeButton) private var showAnime = true
 
     var body: some View {
         List {
@@ -457,8 +621,20 @@ private struct PlayerLayoutPanel: View {
                     Text("Large").tag(1.2)
                 }
             }
+            Section("Transport buttons") {
+                Toggle("Stop", isOn: $showStop)
+                Toggle("Skip backward / forward", isOn: $showSeek)
+                Toggle("Next episode", isOn: $showNext)
+            }
+            Section("Utility buttons") {
+                Toggle("Playback speed", isOn: $showSpeed)
+                Toggle("Subtitles", isOn: $showSubtitles)
+                Toggle("Audio tracks", isOn: $showAudio)
+                Toggle("Aspect ratio", isOn: $showAspect)
+                Toggle("Anime4K", isOn: $showAnime)
+            }
             Section {
-                SettingsHint("The Apple TV player keeps Harbor's transport order: restart, skip back, play/pause, skip forward, audio, subtitles, aspect and speed. Siri Remote navigation replaces desktop hotkeys.")
+                SettingsHint("The Apple TV layout follows Harbor desktop: transport controls on the left, speed/subtitle/audio and picture tools on the right, with the timeline below. Siri Remote navigation replaces desktop hotkeys.")
             }
         }
         .navigationTitle("Player layout")
@@ -470,8 +646,10 @@ private struct PlayerLayoutPanel: View {
 private struct LanguagesPanel: View {
     @AppStorage(SubtitleStyle.Key.audioLang) private var audioLang = ""
     @AppStorage(SubtitleStyle.Key.subLang) private var subLang = ""
+    @AppStorage(SubtitleStyle.Key.secondarySubLang) private var secondarySubLang = ""
     @AppStorage(SubtitleStyle.Key.subsOff) private var subsOff = false
     @AppStorage(SubtitleStyle.Key.preferEmbedded) private var preferEmbedded = false
+    @AppStorage(SubtitleStyle.Key.preferForcedSubs) private var preferForced = false
     @AppStorage(SubtitleStyle.Key.style) private var subStyle = SubtitleStyle.defaultStyle
     @AppStorage(SubtitleStyle.Key.bold) private var subBold = false
     @AppStorage(SubtitleStyle.Key.borderSize) private var borderSize = 2.0
@@ -496,8 +674,17 @@ private struct LanguagesPanel: View {
                 Picker("Subtitle language", selection: $subLang) {
                     ForEach(SubtitleStyle.languages) { Text($0.label).tag($0.id) }
                 }
+                Picker("Secondary subtitle language", selection: $secondarySubLang) {
+                    ForEach(SubtitleStyle.languages) { Text($0.label).tag($0.id) }
+                }
                 Toggle("Subtitles off by default", isOn: $subsOff)
                 Toggle("Prefer embedded subtitles", isOn: $preferEmbedded)
+                Toggle("Prefer forced / signs tracks", isOn: $preferForced)
+            }
+            Section("Live preview") {
+                SubtitlePreviewCard(style: subStyle, fontSize: fontSize, bold: subBold,
+                                    opacity: opacity, boxOpacity: boxOpacity,
+                                    fontColor: fontColor, boxColor: boxColor)
             }
             Section("Subtitle style") {
                 Picker("Background", selection: $subStyle) {
@@ -583,6 +770,50 @@ private struct LanguagesPanel: View {
             }
         }
         .navigationTitle("Languages")
+    }
+}
+
+private struct SubtitlePreviewCard: View {
+    let style: String
+    let fontSize: Double
+    let bold: Bool
+    let opacity: Double
+    let boxOpacity: Double
+    let fontColor: String
+    let boxColor: String
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            LinearGradient(colors: [Color(red: 0.17, green: 0.22, blue: 0.29),
+                                    Color(red: 0.04, green: 0.055, blue: 0.075)],
+                           startPoint: .topLeading, endPoint: .bottomTrailing)
+            HStack(spacing: 28) {
+                Circle().fill(.white.opacity(0.14)).frame(width: 130, height: 130)
+                RoundedRectangle(cornerRadius: 16).fill(.white.opacity(0.10))
+                    .frame(width: 380, height: 120)
+            }
+            Text("I'm gonna make him an offer he can't refuse.")
+                .font(.system(size: min(42, max(22, fontSize * 0.62)), weight: bold ? .bold : .semibold))
+                .foregroundStyle(Color.harborHex(fontColor).opacity(opacity))
+                .padding(.horizontal, 16).padding(.vertical, style == "box" ? 8 : 2)
+                .background(style == "box" ? Color.harborHex(boxColor).opacity(boxOpacity) : .clear,
+                            in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .shadow(color: .black.opacity(style == "shadow" ? 0.95 : 0.55), radius: style == "outline" ? 1 : 5,
+                        x: style == "shadow" ? 3 : 0, y: style == "shadow" ? 3 : 0)
+                .padding(.bottom, 32)
+        }
+        .frame(height: 260)
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+}
+
+private extension Color {
+    static func harborHex(_ value: String) -> Color {
+        let clean = value.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard clean.count == 6, let number = UInt64(clean, radix: 16) else { return .white }
+        return Color(red: Double((number >> 16) & 0xFF) / 255,
+                     green: Double((number >> 8) & 0xFF) / 255,
+                     blue: Double(number & 0xFF) / 255)
     }
 }
 

@@ -7,6 +7,9 @@ struct PlayerTarget: Identifiable {
     let url: URL
     var startAt: Double = 0
     var isAnime: Bool = false
+    var contentID: String = ""
+    var season: Int? = nil
+    var episode: Int? = nil
     var requestHeaders: [String: String] = [:]
     var onProgress: ((Double, Double) -> Void)? = nil
     var onEnded: (() -> Void)? = nil
@@ -46,6 +49,12 @@ struct PlayerView: View {
     @State private var lastMediaRefresh = Date.distantPast
     @State private var lastAudioRecovery = Date.distantPast
     @State private var audioRecoveryStage = 0
+    @State private var skipSegments: [SkipSegment] = []
+    @State private var activeSkip: SkipSegment?
+    @State private var introSkipLoaded = false
+    @State private var autoSkippedSegments = Set<String>()
+    @State private var skipButtonVisible = false
+    @State private var skipHideTask: Task<Void, Never>?
 
     // Scrub-to-seek
     @State private var scrubbing = false
@@ -69,6 +78,8 @@ struct PlayerView: View {
     @AppStorage(SubtitleStyle.Key.assOverride) private var subAssOverride = "no"
     @AppStorage(SubtitleStyle.Key.lineSpacing) private var subLineSpacing = 0.0
     @AppStorage(SubtitleStyle.Key.subLang) private var prefSubLang = ""
+    @AppStorage(SubtitleStyle.Key.secondarySubLang) private var secondarySubLang = ""
+    @AppStorage(SubtitleStyle.Key.preferForcedSubs) private var preferForcedSubs = false
     @AppStorage(SubtitleStyle.Key.audioLang) private var prefAudioLang = ""
     @AppStorage(SubtitleStyle.Key.subsOff) private var subsOffByDefault = false
     @AppStorage(SubtitleStyle.Key.preferEmbedded) private var preferEmbedded = false
@@ -85,8 +96,22 @@ struct PlayerView: View {
     @AppStorage(SubtitleStyle.Key.anime4KAnimeOnly) private var anime4KAnimeOnly = true
     @AppStorage(SubtitleStyle.Key.anime4KIndicator) private var anime4KIndicator = true
     @AppStorage(SubtitleStyle.Key.anime4KMode) private var anime4KMode = "A"
+    @AppStorage(SubtitleStyle.Key.showSkipButton) private var showSkipButton = true
+    @AppStorage(SubtitleStyle.Key.autoSkipIntro) private var autoSkipIntro = false
+    @AppStorage(SubtitleStyle.Key.autoSkipRecap) private var autoSkipRecap = false
+    @AppStorage(SubtitleStyle.Key.autoSkipOutro) private var autoSkipOutro = false
+    @AppStorage(SubtitleStyle.Key.skipButtonHideSec) private var skipButtonHideSec = 10
+    @AppStorage(SubtitleStyle.Key.nextEpisodeLeadSec) private var nextEpisodeLeadSec = -1
+    @AppStorage(SubtitleStyle.Key.showRestartButton) private var showRestartButton = true
+    @AppStorage(SubtitleStyle.Key.showSeekButtons) private var showSeekButtons = true
+    @AppStorage(SubtitleStyle.Key.showNextButton) private var showNextButton = true
+    @AppStorage(SubtitleStyle.Key.showSpeedButton) private var showSpeedButton = true
+    @AppStorage(SubtitleStyle.Key.showSubtitleButton) private var showSubtitleButton = true
+    @AppStorage(SubtitleStyle.Key.showAudioButton) private var showAudioButton = true
+    @AppStorage(SubtitleStyle.Key.showAspectButton) private var showAspectButton = true
+    @AppStorage(SubtitleStyle.Key.showAnimeButton) private var showAnimeButton = true
 
-    private enum Control: Hashable { case scrub, restart, back, play, fwd, audio, subs, aspect, speed, anime }
+    private enum Control: Hashable { case scrub, restart, back, play, fwd, next, audio, subs, aspect, speed, anime }
     private enum PanelKind { case audio, subtitles, subtitleSettings, aspect, speed, anime, debug }
     @State private var selected: Control = .play
     @State private var lastButton: Control = .play
@@ -120,8 +145,13 @@ struct PlayerView: View {
                 ProgressView().controlSize(.large).tint(accent)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            if showInfo && !showOptions { controlBar }
+            if showInfo { controlBar }
             if showOptions { optionsPanel }
+            if let segment = activeSkip, skipButtonVisible, showSkipButton, !showOptions {
+                skipPill(segment)
+            } else if upNextActive, !showOptions {
+                upNextPill
+            }
             if animeActive && anime4KIndicator {
                 VStack {
                     HStack {
@@ -141,11 +171,14 @@ struct PlayerView: View {
             if $0 {
                 if readyAt == .distantFuture { readyAt = Date() }
                 refreshTracksSoon()
+                loadIntroSkipIfNeeded()
             }
         }
         .onReceive(model.$position) { position in
             maybeAutoSelectTracks()
             monitorAudioOutput()
+            loadIntroSkipIfNeeded()
+            updateActiveSkip(at: position)
             if model.duration > 0, position > 0, abs(position - lastSavedPosition) >= 30 {
                 lastSavedPosition = position
                 target.onProgress?(position, model.duration)
@@ -164,7 +197,7 @@ struct PlayerView: View {
             UIApplication.shared.isIdleTimerDisabled = true
         }
         .onDisappear {
-            hideTask?.cancel(); scrubCommit?.cancel()
+            hideTask?.cancel(); scrubCommit?.cancel(); skipHideTask?.cancel()
             if !handledEnd { target.onProgress?(model.position, model.duration) }
             UIApplication.shared.isIdleTimerDisabled = false
         }
@@ -195,7 +228,10 @@ struct PlayerView: View {
         if controlsHidden {
             switch type {
             case .menu: requestDismiss()
-            case .playPause: toggle()
+            case .playPause:
+                if activeSkip != nil, skipButtonVisible { performSkip() } else { toggle() }
+            case .select:
+                if activeSkip != nil, skipButtonVisible { performSkip() } else { showControls() }
             default: showControls()
             }
             return
@@ -204,7 +240,8 @@ struct PlayerView: View {
         switch type {
         case .menu:
             if scrubbing { cancelScrub() } else { requestDismiss() }
-        case .playPause: toggle()
+        case .playPause:
+            if activeSkip != nil, skipButtonVisible { performSkip() } else { toggle() }
         case .select: activate(selected)
         case .leftArrow: horizontal(-1)
         case .rightArrow: horizontal(1)
@@ -215,12 +252,17 @@ struct PlayerView: View {
     }
 
     private var buttonRow: [Control] {
-        var c: [Control] = [.restart, .back, .play, .fwd]
-        if !audioTracks.isEmpty { c.append(.audio) }
-        c.append(.subs)
-        c.append(.speed)
-        c.append(.aspect)
-        if animeAvailable { c.append(.anime) }
+        var c: [Control] = []
+        if showRestartButton { c.append(.restart) }
+        if showSeekButtons { c.append(.back) }
+        c.append(.play)
+        if showSeekButtons { c.append(.fwd) }
+        if showNextButton, target.onEnded != nil { c.append(.next) }
+        if showSpeedButton { c.append(.speed) }
+        if showSubtitleButton { c.append(.subs) }
+        if showAudioButton, !audioTracks.isEmpty { c.append(.audio) }
+        if showAspectButton { c.append(.aspect) }
+        if showAnimeButton, animeAvailable { c.append(.anime) }
         return c
     }
 
@@ -249,10 +291,11 @@ struct PlayerView: View {
     private func activate(_ c: Control) {
         switch c {
         case .scrub:   scrubbing ? commitScrub() : toggle()
-        case .restart: restart()
+        case .restart: requestDismiss()
         case .back:    seek(-Double(seekBackStep))
         case .fwd:     seek(Double(seekForwardStep))
         case .play:    toggle()
+        case .next:    playNextNow()
         case .audio:   openPanel(.audio)
         case .subs:    openPanel(.subtitles)
         case .aspect:  openPanel(.aspect)
@@ -275,61 +318,75 @@ struct PlayerView: View {
         } }
         if showQualityInfo, !audioCodec.isEmpty { parts.append(audioCodec.uppercased()) }
         if abs(speed - 1.0) > 0.01 { parts.append(String(format: "%gx", speed)) }
-        // Audio-output diagnostic: which driver is actually producing sound ("AO —" = none).
-        if showQualityInfo { parts.append(audioOut.isEmpty ? "AO —" : "AO \(audioOut)") }
         return parts.joined(separator: "  ·  ")
     }
 
-    /// Floating Liquid Glass transport surface. On tvOS 26 this uses Apple's native
-    /// refractive glass; older systems receive a material fallback with the same geometry.
+    /// Bottom player chrome matching the supplied Apple TV reference: title and
+    /// transport on one line, utility circles on the right, then a full-width
+    /// timeline and elapsed/remaining clocks over a soft video gradient.
     private var controlBar: some View {
         VStack {
             Spacer()
-            VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .bottom, spacing: 28) {
+                    VStack(alignment: .leading, spacing: 3) {
                     if !target.title.isEmpty {
-                        Text(target.title).font(.system(size: 28 * playerTitleScale, weight: .semibold))
+                            Text(target.title)
+                                .font(.system(size: 40 * playerTitleScale, weight: .bold))
                             .foregroundStyle(.white).lineLimit(1)
                     }
                     if !metadataLine.isEmpty {
-                        Text(metadataLine).font(.system(size: 18))
-                            .foregroundStyle(.white.opacity(0.6))
-                    }
-                }
-                HStack(spacing: 16) {
-                    Text(timeString(scrubbing ? scrubTarget : model.position)).font(.callout.monospacedDigit())
-                        .foregroundStyle(scrubbing ? accent : .white)
-                    scrubber
-                    Text(timeString(model.duration)).font(.callout.monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.65))
-                }
-                HStack {
-                    HStack(spacing: 18) {
-                        ctrlButton(.restart, "arrow.counterclockwise")
-                        ctrlButton(.back, "gobackward.\(seekBackStep)")
-                        ctrlButton(.play, model.paused ? "play.fill" : "pause.fill", big: true)
-                        ctrlButton(.fwd, "goforward.\(seekForwardStep)")
+                            Text(metadataLine).font(.system(size: 18, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.66))
+                        }
                     }
                     Spacer()
-                    HStack(spacing: 18) {
-                        if !audioTracks.isEmpty { ctrlButton(.audio, "waveform") }
-                        ctrlButton(.subs, "captions.bubble")
-                        ctrlButton(.speed, "speedometer")
-                        ctrlButton(.aspect, "aspectratio")
-                        if animeAvailable { ctrlButton(.anime, "sparkles") }
+                }
+
+                HStack(alignment: .center, spacing: 16) {
+                    HStack(spacing: 14) {
+                        if showRestartButton { ctrlButton(.restart, "stop.fill") }
+                        if showSeekButtons { ctrlButton(.back, "gobackward.\(seekBackStep)") }
+                        ctrlButton(.play, model.paused ? "play.fill" : "pause.fill", big: true)
+                        if showSeekButtons { ctrlButton(.fwd, "goforward.\(seekForwardStep)") }
+                        if showNextButton, target.onEnded != nil { ctrlButton(.next, "forward.end.fill") }
+                    }
+                    Spacer()
+                    HStack(spacing: 14) {
+                        if showSpeedButton { ctrlButton(.speed, "speedometer") }
+                        if showSubtitleButton { ctrlButton(.subs, "captions.bubble.fill") }
+                        if showAudioButton, !audioTracks.isEmpty { ctrlButton(.audio, "waveform.circle.fill") }
+                        if showAspectButton { ctrlButton(.aspect, "aspectratio") }
+                        if showAnimeButton, animeAvailable { ctrlButton(.anime, "sparkles") }
                     }
                 }
+
+                scrubber
+
+                HStack {
+                    Text(timeString(scrubbing ? scrubTarget : model.position))
+                        .font(.system(size: 22, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(scrubbing ? accent : .white.opacity(0.92))
+                    Spacer()
+                    let shown = scrubbing ? scrubTarget : model.position
+                    Text("−\(timeString(max(0, model.duration - shown)))")
+                        .font(.system(size: 22, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.78))
+                }
             }
-            .padding(.horizontal, 34)
-            .padding(.vertical, 28)
-            .harborGlass(cornerRadius: 38, tint: Color.black.opacity(0.12))
-            .overlay {
-                RoundedRectangle(cornerRadius: 38, style: .continuous)
-                    .stroke(.white.opacity(0.16), lineWidth: 1)
-            }
-            .shadow(color: .black.opacity(0.45), radius: 34, y: 18)
-            .padding(.horizontal, 54)
+            .padding(.horizontal, 68)
             .padding(.bottom, 42)
+        }
+        .background(alignment: .bottom) {
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: .black.opacity(0.24), location: 0.24),
+                    .init(color: .black.opacity(0.78), location: 0.72),
+                    .init(color: .black.opacity(0.94), location: 1),
+                ], startPoint: .top, endPoint: .bottom)
+                .frame(height: 430)
+                .ignoresSafeArea()
         }
         .ignoresSafeArea()
         .transition(.opacity)
@@ -341,33 +398,87 @@ struct PlayerView: View {
         return GeometryReader { geo in
             let frac = model.duration > 0 ? min(1, max(0, shown / model.duration)) : 0
             let w = geo.size.width
-            let barH: CGFloat = focused ? 10 : 6
-            let knob: CGFloat = focused ? 28 : 18
+            let barH: CGFloat = focused ? 11 : 7
+            let knob: CGFloat = focused ? 28 : 20
             ZStack(alignment: .leading) {
-                Capsule().fill(.white.opacity(0.22)).frame(height: barH)
-                Capsule().fill(accent).frame(width: max(0, w * frac), height: barH)
-                Circle().fill(accent).frame(width: knob, height: knob)
+                Capsule().fill(.white.opacity(0.32)).frame(height: barH)
+                Capsule().fill(.white.opacity(0.96)).frame(width: max(0, w * frac), height: barH)
+                Circle().fill(.white).frame(width: knob, height: knob)
                     .offset(x: max(0, w * frac - knob / 2))
             }
             .frame(maxHeight: .infinity, alignment: .center)
             .animation(.easeOut(duration: 0.12), value: frac)
         }
-        .frame(height: 28)
+        .frame(height: 30)
     }
 
     private func ctrlButton(_ c: Control, _ icon: String, big: Bool = false) -> some View {
         let sel = (selected == c)
-        let d: CGFloat = big ? 92 : 64
+        let d: CGFloat = big ? 78 : 68
         return Image(systemName: icon)
-            .font(.system(size: big ? 38 : 26, weight: .semibold))
-            .foregroundStyle(.white)
+            .font(.system(size: big ? 31 : 25, weight: .semibold))
+            .foregroundStyle(sel ? .black : .white)
             .frame(width: d, height: d)
-            .background(Circle().fill(sel ? accent.opacity(0.48) : Color.white.opacity(0.06)))
-            .harborGlass(cornerRadius: d / 2, tint: sel ? accent.opacity(0.28) : nil)
-            .overlay(Circle().stroke(sel ? accent.opacity(0.9) : .white.opacity(0.12), lineWidth: sel ? 2 : 1))
-            .shadow(color: sel ? accent.opacity(0.4) : .clear, radius: 18)
-            .scaleEffect(sel ? 1.13 : 1.0)
+            .background(Circle().fill(sel ? Color.white : Color.white.opacity(0.13)))
+            .harborGlass(cornerRadius: d / 2, tint: sel ? .white.opacity(0.7) : .black.opacity(0.04))
+            .overlay(Circle().stroke(.white.opacity(sel ? 0.92 : 0.28), lineWidth: sel ? 2.5 : 1))
+            .shadow(color: .black.opacity(0.42), radius: 15, y: 8)
+            .scaleEffect(sel ? 1.10 : 1.0)
             .animation(.spring(response: 0.28, dampingFraction: 0.72), value: sel)
+    }
+
+    private func skipPill(_ segment: SkipSegment) -> some View {
+        VStack {
+            Spacer()
+            HStack {
+                Spacer()
+                HStack(spacing: 12) {
+                    Image(systemName: "forward.end.fill")
+                    Text(segment.label)
+                }
+                .font(.system(size: 23, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 14)
+                .harborGlass(cornerRadius: 30, tint: Color.black.opacity(0.18))
+                .overlay(Capsule().stroke(.white.opacity(0.30), lineWidth: 1))
+                .shadow(color: .black.opacity(0.45), radius: 18, y: 9)
+            }
+            .padding(.trailing, 68)
+            .padding(.bottom, showInfo ? 355 : 46)
+        }
+        .transition(.opacity.combined(with: .scale(scale: 0.96)))
+    }
+
+    private var upNextActive: Bool {
+        guard target.onEnded != nil, nextEpisodeLeadSec != 0, model.duration > 0 else { return false }
+        let automatic = max(25, min(90, Int(model.duration * 0.045)))
+        let lead = nextEpisodeLeadSec < 0 ? automatic : nextEpisodeLeadSec
+        return model.position > 0 && model.duration - model.position <= Double(lead)
+    }
+
+    private var upNextPill: some View {
+        VStack {
+            Spacer()
+            HStack {
+                Spacer()
+                HStack(spacing: 12) {
+                    Image(systemName: "forward.end.fill")
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Up Next").font(.system(size: 17, weight: .medium))
+                        Text("Next Episode").font(.system(size: 23, weight: .bold))
+                    }
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 24).padding(.vertical, 13)
+                .harborGlass(cornerRadius: 28, tint: Color.black.opacity(0.18))
+                .overlay(Capsule().stroke(.white.opacity(0.30), lineWidth: 1))
+                .shadow(color: .black.opacity(0.45), radius: 18, y: 9)
+            }
+            .padding(.trailing, 68)
+            .padding(.bottom, showInfo ? 355 : 46)
+        }
+        .transition(.opacity.combined(with: .scale(scale: 0.96)))
     }
 
     // MARK: - Options panel
@@ -540,11 +651,14 @@ struct PlayerView: View {
             let ts = groups[code]!
             if ts.count == 1 {
                 let t = ts[0]
-                rows.append(OptionRow(label: langName(code), detail: t.title, isSelected: selectedID == t.id) { select(t.id) })
+                let base = t.title.isEmpty ? "Track \(t.id)" : t.title
+                rows.append(OptionRow(label: "\(base)  ·  [\(langName(code))]",
+                                      isSelected: selectedID == t.id) { select(t.id) })
             } else {
                 rows.append(OptionRow(label: langName(code), isHeader: true))
                 for (i, t) in ts.enumerated() {
-                    rows.append(OptionRow(label: t.title.isEmpty ? "Track \(i + 1)" : t.title, isSelected: selectedID == t.id) { select(t.id) })
+                    let base = t.title.isEmpty ? "Track \(i + 1)" : t.title
+                    rows.append(OptionRow(label: base, isSelected: selectedID == t.id) { select(t.id) })
                 }
             }
         }
@@ -571,67 +685,74 @@ struct PlayerView: View {
 
     private var optionsPanel: some View {
         let rows = optionRows
-        return HStack(spacing: 0) {
+        let wide = panelKind == .subtitleSettings || panelKind == .debug
+        return VStack {
             Spacer()
-            VStack(alignment: .leading, spacing: 0) {
-                Text(panelTitle)
-                    .font(.system(size: 30, weight: .semibold)).foregroundStyle(.white)
-                    .padding(.horizontal, 40).padding(.top, 40).padding(.bottom, 12)
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 4) {
-                            ForEach(Array(rows.enumerated()), id: \.element.id) { i, row in
-                                if row.isHeader {
-                                    Text(row.label.uppercased())
-                                        .font(.system(size: 18, weight: .semibold)).tracking(1)
-                                        .foregroundStyle(.white.opacity(0.45))
-                                        .padding(.horizontal, 24).padding(.top, 16).padding(.bottom, 2)
-                                        .id(i)
-                                } else {
-                                    HStack {
-                                        Text(row.label).lineLimit(1)
-                                            .foregroundStyle(.white)
-                                        Spacer()
-                                        if row.isSelected {
-                                            Image(systemName: "checkmark")
-                                                .foregroundStyle(accent)
-                                        } else if !row.detail.isEmpty {
-                                            Text(row.detail)
-                                                .foregroundStyle(.white.opacity(0.62))
+            HStack(spacing: 0) {
+                Spacer()
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(panelTitle)
+                        .font(.system(size: 28, weight: .bold)).foregroundStyle(.white)
+                        .padding(.horizontal, 28).padding(.top, 26).padding(.bottom, 10)
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 3) {
+                                ForEach(Array(rows.enumerated()), id: \.element.id) { i, row in
+                                    if row.isHeader {
+                                        Text(row.label.uppercased())
+                                            .font(.system(size: 15, weight: .bold)).tracking(1.2)
+                                            .foregroundStyle(.white.opacity(0.48))
+                                            .padding(.horizontal, 20).padding(.top, 13).padding(.bottom, 3)
+                                            .id(i)
+                                    } else {
+                                        let focused = i == optionRow
+                                        HStack(spacing: 14) {
+                                            if row.isSelected {
+                                                Image(systemName: "checkmark")
+                                                    .font(.system(size: 20, weight: .bold))
+                                                    .frame(width: 24)
+                                            } else {
+                                                Color.clear.frame(width: 24, height: 1)
+                                            }
+                                            Text(row.label).lineLimit(wide ? 2 : 1)
+                                            Spacer(minLength: 12)
+                                            if !row.isSelected, !row.detail.isEmpty {
+                                                Text(row.detail).lineLimit(1)
+                                                    .foregroundStyle(focused ? .black.opacity(0.64) : .white.opacity(0.58))
+                                            }
                                         }
+                                        .font(.system(size: 22, weight: focused ? .semibold : .medium))
+                                        .foregroundStyle(focused ? .black : .white)
+                                        .padding(.horizontal, 18).padding(.vertical, 11)
+                                        .background(focused ? Color.white.opacity(0.94) : Color.clear)
+                                        .clipShape(Capsule(style: .continuous))
+                                        .scaleEffect(focused ? 1.012 : 1)
+                                        .animation(.spring(response: 0.24, dampingFraction: 0.82), value: optionRow)
+                                        .id(i)
                                     }
-                                    .padding(.horizontal, 24).padding(.vertical, 12)
-                                    .background(i == optionRow ? accent.opacity(0.28) : Color.clear)
-                                    .overlay {
-                                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                            .stroke(i == optionRow ? accent.opacity(0.9) : .clear, lineWidth: 1.5)
-                                    }
-                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                    .scaleEffect(i == optionRow ? 1.015 : 1)
-                                    .animation(.spring(response: 0.25, dampingFraction: 0.78), value: optionRow)
-                                    .id(i)
                                 }
                             }
+                            .padding(.horizontal, 18).padding(.bottom, 20)
                         }
-                        .padding(24)
+                        .onChange(of: optionRow) { _ in
+                            withAnimation(.easeOut(duration: 0.16)) { proxy.scrollTo(optionRow, anchor: .center) }
+                        }
                     }
-                    .onChange(of: optionRow) { _ in withAnimation { proxy.scrollTo(optionRow, anchor: .center) } }
                 }
+                .frame(width: wide ? 690 : 540)
+                .frame(height: wide ? 720 : min(600, CGFloat(max(2, rows.count)) * 61 + 82))
+                .harborGlass(cornerRadius: 34, tint: Color.black.opacity(0.20))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 34, style: .continuous)
+                        .stroke(.white.opacity(0.26), lineWidth: 1.2)
+                }
+                .shadow(color: .black.opacity(0.58), radius: 34, y: 18)
+                .padding(.trailing, 68)
             }
-            .frame(width: 720)
-            .frame(maxHeight: .infinity)
-            .harborGlass(cornerRadius: 38, tint: Color.black.opacity(0.16))
-            .overlay {
-                RoundedRectangle(cornerRadius: 38, style: .continuous)
-                    .stroke(.white.opacity(0.16), lineWidth: 1)
-            }
-            .shadow(color: .black.opacity(0.5), radius: 40, x: -12, y: 18)
-            .padding(.vertical, 40)
-            .padding(.trailing, 42)
+            .padding(.bottom, wide ? 44 : 220)
         }
-        .background(Color.black.opacity(0.16))
         .ignoresSafeArea()
-        .transition(.move(edge: .trailing))
+        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottomTrailing)))
     }
 
     private func moveOption(_ d: Int) {
@@ -757,11 +878,16 @@ struct PlayerView: View {
         // Subtitles: off by default, or preferred language.
         if subsOffByDefault {
             setSub(-1)
-        } else if !prefSubLang.isEmpty,
-                  let s = subtitleTracks.first(where: {
-                      $0.lang.lowercased().hasPrefix(prefSubLang) && (!preferEmbedded || !$0.external)
-                  }) ?? subtitleTracks.first(where: { $0.lang.lowercased().hasPrefix(prefSubLang) }) {
-            setSub(s.id)
+        } else {
+            let primary = subtitleTracks.filter { prefSubLang.isEmpty || $0.lang.lowercased().hasPrefix(prefSubLang) }
+            let secondary = subtitleTracks.filter { !secondarySubLang.isEmpty && $0.lang.lowercased().hasPrefix(secondarySubLang) }
+            let ordered = primary + secondary
+            let forced = preferForcedSubs ? ordered.first(where: {
+                $0.title.localizedCaseInsensitiveContains("forced")
+                    || $0.title.localizedCaseInsensitiveContains("signs")
+            }) : nil
+            let embedded = preferEmbedded ? ordered.first(where: { !$0.external }) : nil
+            if let track = forced ?? embedded ?? ordered.first { setSub(track.id) }
         }
         refreshTracksSoon()
     }
@@ -774,6 +900,90 @@ struct PlayerView: View {
         commitScrubIfNeeded()
         model.controller?.seekAbsolute(0)
         model.position = 0
+        flashControls()
+    }
+
+    private func playNextNow() {
+        guard let next = target.onEnded else { return }
+        handledEnd = true
+        target.onProgress?(model.position, model.duration)
+        dismiss()
+        next()
+    }
+
+    // MARK: - Intro / recap / credits skipping
+
+    private func loadIntroSkipIfNeeded() {
+        guard !introSkipLoaded, model.duration > 0 else { return }
+        introSkipLoaded = true
+        let chapters = model.controller?.chapters() ?? []
+        let contentID = target.contentID
+        let season = target.season
+        let episode = target.episode
+        let duration = model.duration
+        let isAnime = target.isAnime
+        Task {
+            let segments = await IntroSkipService.segments(
+                contentID: contentID, season: season, episode: episode,
+                duration: duration, isAnime: isAnime, chapters: chapters)
+            await MainActor.run {
+                skipSegments = segments
+                updateActiveSkip(at: model.position)
+            }
+        }
+    }
+
+    private func updateActiveSkip(at position: Double) {
+        let segment = skipSegments.first {
+            position >= $0.start && position < $0.end - 0.75
+        }
+        guard let segment else {
+            if activeSkip != nil {
+                activeSkip = nil
+                skipButtonVisible = false
+                skipHideTask?.cancel()
+            }
+            return
+        }
+
+        if shouldAutoSkip(segment), !autoSkippedSegments.contains(segment.id) {
+            autoSkippedSegments.insert(segment.id)
+            activeSkip = nil
+            skipButtonVisible = false
+            model.controller?.seekAbsolute(segment.end)
+            model.position = segment.end
+            flashControls()
+            return
+        }
+
+        guard activeSkip?.id != segment.id else { return }
+        activeSkip = segment
+        skipButtonVisible = showSkipButton
+        skipHideTask?.cancel()
+        guard skipButtonHideSec > 0 else { return }
+        skipHideTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(skipButtonHideSec) * 1_000_000_000)
+            guard !Task.isCancelled, activeSkip?.id == segment.id else { return }
+            withAnimation { skipButtonVisible = false }
+        }
+    }
+
+    private func shouldAutoSkip(_ segment: SkipSegment) -> Bool {
+        switch segment.kind {
+        case .intro: return autoSkipIntro
+        case .recap: return autoSkipRecap
+        case .outro: return autoSkipOutro
+        }
+    }
+
+    private func performSkip() {
+        guard let segment = activeSkip else { return }
+        autoSkippedSegments.insert(segment.id)
+        model.controller?.seekAbsolute(segment.end)
+        model.position = segment.end
+        activeSkip = nil
+        skipButtonVisible = false
+        skipHideTask?.cancel()
         flashControls()
     }
 

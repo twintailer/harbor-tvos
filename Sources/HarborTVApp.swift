@@ -127,7 +127,9 @@ struct RootView: View {
         switch background {
         case "oled": return .black
         case "system": return .black
-        default: return Color(red: 0.025, green: 0.032, blue: 0.044)
+        // Harbor Desktop uses a neutral charcoal stage; the old blue-black tint
+        // made cards and lists look like a separate theme from the reference UI.
+        default: return Color(red: 0.045, green: 0.05, blue: 0.052)
         }
     }
 

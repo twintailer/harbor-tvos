@@ -1,6 +1,28 @@
 import Foundation
 
-// Bridges mpv playback state to the SwiftUI controls overlay.
+/// Common surface used by the player chrome. MPV and VLC both conform, so the
+/// controls never need to know which decoder currently owns the video view.
+@MainActor
+protocol HarborPlayerController: AnyObject {
+    var videoSizeMode: String { get }
+    func togglePause()
+    func seekRelative(_ delta: Double)
+    func seekAbsolute(_ seconds: Double)
+    func tracks(ofType type: String) -> [MPVTrack]
+    func setAudioTrack(_ id: Int)
+    func setSubtitleTrack(_ id: Int)
+    func setSpeed(_ speed: Double)
+    func setSubDelay(_ seconds: Double)
+    func setAudioDelay(_ seconds: Double)
+    func setAnime4K(_ enabled: Bool)
+    func mediaSummary() -> (height: Int, audioCodec: String, audioOut: String)
+    func chapters() -> [MediaChapter]
+    func recoverAudioOutput(forceStereo: Bool)
+    func setVideoSize(_ mode: String)
+    func applySubtitleStyle()
+}
+
+// Bridges the active playback engine to the SwiftUI controls overlay.
 @MainActor
 final class PlayerModel: ObservableObject {
     @Published var position: Double = 0
@@ -12,7 +34,7 @@ final class PlayerModel: ObservableObject {
     /// problems can be read directly on the Apple TV (no Mac needed).
     @Published var logLines: [String] = []
 
-    weak var controller: MPVViewController?
+    weak var controller: (any HarborPlayerController)?
 
     func togglePause() { controller?.togglePause() }
     func seekRelative(_ delta: Double) { controller?.seekRelative(delta) }

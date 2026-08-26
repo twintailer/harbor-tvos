@@ -13,6 +13,11 @@ packages:
     # 1.0.0 adds the AVFoundation audio output for iOS/tvOS. Its AudioUnit-only
     # predecessor fails on some tvOS 26 HDMI routes and leaves current-ao empty.
     exactVersion: 1.0.0
+  # Binary VLCKit package with a native tvOS slice. This is the same fallback
+  # engine used by the supplied Orivio Apple TV reference project.
+  VLCKit:
+    url: https://github.com/tylerjonesio/vlckit-spm
+    from: 3.6.0
 targets:
   HarborTV:
     type: application
@@ -28,12 +33,14 @@ targets:
         # GPL variant keeps Harbor's broad codec/protocol support. MPVKit 1.0.0
         # contains both AVFoundation and AudioUnit output drivers on tvOS.
         product: MPVKit-GPL
+      - package: VLCKit
+        product: VLCKitSPM
     info:
       path: Info.plist
       properties:
         CFBundleDisplayName: Harbor
-        CFBundleShortVersionString: "0.3.0"
-        CFBundleVersion: "5"
+        CFBundleShortVersionString: "0.3.1"
+        CFBundleVersion: "6"
         UIRequiredDeviceCapabilities: [arm64]
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true

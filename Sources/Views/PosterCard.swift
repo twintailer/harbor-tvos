@@ -10,6 +10,8 @@ struct PosterCard: View {
     @AppStorage(SubtitleStyle.Key.posterScale) private var posterScale = 1.0
     @AppStorage(SubtitleStyle.Key.posterRadius) private var posterRadius = 12.0
     @AppStorage(SubtitleStyle.Key.reduceArtworkMotion) private var reduceArtworkMotion = false
+    @AppStorage(SubtitleStyle.Key.interfaceStyle) private var interfaceStyle = "harbor"
+    @AppStorage(SubtitleStyle.Key.accent) private var accentID = "green"
 
     private var cardWidth: CGFloat { width * posterScale }
 
@@ -17,23 +19,8 @@ struct PosterCard: View {
         VStack(alignment: .leading, spacing: 12) {
             NavigationLink(value: item) {
                 ZStack(alignment: .bottomLeading) {
-                    AsyncImage(url: URL(string: item.poster ?? "")) { phase in
-                        switch phase {
-                        case .success(let img):
-                            img.resizable().aspectRatio(contentMode: .fill)
-                        case .empty:
-                            ZStack { Color.white.opacity(0.06); ProgressView() }
-                        default:
-                            ZStack {
-                                Color.white.opacity(0.06)
-                                Text(item.name)
-                                    .font(.caption)
-                                    .foregroundStyle(.white.opacity(0.6))
-                                    .multilineTextAlignment(.center)
-                                    .padding(8)
-                            }
-                        }
-                    }
+                    HarborArtworkImage(url: item.poster, maxPixelSize: 900,
+                                       fallbackText: item.name, showProgress: true)
                     .frame(width: cardWidth, height: cardWidth * 3 / 2)
                     .clipShape(RoundedRectangle(cornerRadius: posterRadius, style: .continuous))
 
@@ -45,7 +32,9 @@ struct PosterCard: View {
                 .frame(width: cardWidth, height: cardWidth * 3 / 2)
                 .clipShape(RoundedRectangle(cornerRadius: posterRadius, style: .continuous))
             }
-            .buttonStyle(.card)
+            .buttonStyle(HarborArtworkButtonStyle(
+                radius: posterRadius, accent: focusColor,
+                reduceMotion: reduceArtworkMotion))
             .transaction { transaction in
                 if reduceArtworkMotion { transaction.animation = nil }
             }
@@ -55,6 +44,14 @@ struct PosterCard: View {
                 .foregroundStyle(.white.opacity(0.9))
                 .lineLimit(1)
                 .frame(width: cardWidth, alignment: .leading)
+        }
+    }
+
+    private var focusColor: Color {
+        switch interfaceStyle {
+        case "max": return .white
+        case "netflix": return Color(red: 0.90, green: 0.035, blue: 0.075)
+        default: return HarborSettings.accentColor(accentID)
         }
     }
 }
@@ -86,6 +83,7 @@ struct ContinueCard: View {
     var width: CGFloat = 400
     @AppStorage(SubtitleStyle.Key.accent) private var accent = "green"
     @AppStorage(SubtitleStyle.Key.posterRadius) private var posterRadius = 12.0
+    @AppStorage(SubtitleStyle.Key.interfaceStyle) private var interfaceStyle = "harbor"
 
     private var height: CGFloat { width * 9 / 16 }
 
@@ -93,14 +91,8 @@ struct ContinueCard: View {
         VStack(alignment: .leading, spacing: 12) {
             NavigationLink(value: entry.meta) {
                 ZStack(alignment: .bottomLeading) {
-                    AsyncImage(url: URL(string: entry.meta.background ?? entry.meta.poster ?? "")) { phase in
-                        switch phase {
-                        case .success(let img):
-                            img.resizable().aspectRatio(contentMode: .fill)
-                        default:
-                            Color.white.opacity(0.06)
-                        }
-                    }
+                    HarborArtworkImage(url: entry.meta.background ?? entry.meta.poster,
+                                       maxPixelSize: 1100)
                     .frame(width: width, height: height)
                     .clipShape(RoundedRectangle(cornerRadius: posterRadius, style: .continuous))
 
@@ -143,7 +135,9 @@ struct ContinueCard: View {
                 .frame(width: width, height: height)
                 .clipShape(RoundedRectangle(cornerRadius: posterRadius, style: .continuous))
             }
-            .buttonStyle(.card)
+            .buttonStyle(HarborArtworkButtonStyle(radius: posterRadius,
+                                                   accent: focusColor,
+                                                   reduceMotion: false))
 
             Text(entry.meta.name)
                 .font(.system(size: 20, weight: .medium))
@@ -151,5 +145,46 @@ struct ContinueCard: View {
                 .lineLimit(1)
                 .frame(width: width, alignment: .leading)
         }
+    }
+
+    private var focusColor: Color {
+        switch interfaceStyle {
+        case "max": return .white
+        case "netflix": return Color(red: 0.90, green: 0.035, blue: 0.075)
+        default: return HarborSettings.accentColor(accent)
+        }
+    }
+}
+
+/// Flat artwork focus treatment inspired by Orivio's Max/Netflix themes. It
+/// avoids tvOS' large grey `.card` platter and only lifts the artwork itself.
+private struct HarborArtworkButtonStyle: ButtonStyle {
+    let radius: CGFloat
+    let accent: Color
+    let reduceMotion: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        HarborArtworkButtonBody(configuration: configuration, radius: radius,
+                                accent: accent, reduceMotion: reduceMotion)
+    }
+}
+
+private struct HarborArtworkButtonBody: View {
+    let configuration: ButtonStyle.Configuration
+    let radius: CGFloat
+    let accent: Color
+    let reduceMotion: Bool
+    @Environment(\.isFocused) private var focused
+
+    var body: some View {
+        configuration.label
+            .overlay {
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .stroke(focused ? accent : .white.opacity(0.06),
+                            lineWidth: focused ? 3 : 1)
+            }
+            .scaleEffect(focused ? 1.055 : (configuration.isPressed ? 0.985 : 1))
+            .shadow(color: .black.opacity(focused ? 0.58 : 0), radius: 20, y: 10)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: focused)
     }
 }

@@ -48,9 +48,8 @@ struct DetailView: View {
 
     var body: some View {
         ZStack {
-            AsyncImage(url: URL(string: meta.background ?? meta.poster ?? "")) { img in
-                img.resizable().aspectRatio(contentMode: .fill)
-            } placeholder: { Color.black }
+            HarborArtworkImage(url: meta.background ?? meta.poster,
+                               maxPixelSize: 2200)
             .ignoresSafeArea()
             .overlay(LinearGradient(
                 colors: [.black.opacity(0.2), .black.opacity(0.95)],
@@ -482,9 +481,7 @@ private struct EpisodeStripCard: View {
         Button(action: onPlay) {
             VStack(alignment: .leading, spacing: 10) {
                 ZStack(alignment: .bottomLeading) {
-                    AsyncImage(url: URL(string: video.thumbnail ?? "")) { image in
-                        image.resizable().aspectRatio(contentMode: .fill)
-                    } placeholder: { Color.white.opacity(0.06) }
+                    HarborArtworkImage(url: video.thumbnail, maxPixelSize: 900)
                     .frame(width: 360, height: 203)
                     .blur(radius: hideSpoilers && hideThumbnail ? 24 : 0)
                     if progress.ratio > 0.01 {
@@ -521,11 +518,7 @@ struct EpisodeRowTV: View {
         Button(action: onPlay) {
             HStack(spacing: 28) {
                 ZStack(alignment: .topLeading) {
-                    AsyncImage(url: URL(string: video.thumbnail ?? "")) { img in
-                        img.resizable().aspectRatio(contentMode: .fill)
-                    } placeholder: {
-                        ZStack { Color.white.opacity(0.06); Image(systemName: "play.circle").font(.system(size: 30)).foregroundStyle(.white.opacity(0.5)) }
-                    }
+                    HarborArtworkImage(url: video.thumbnail, maxPixelSize: 800)
                     .frame(width: 300, height: 168)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .blur(radius: hideSpoilers && hideThumbnail ? 24 : 0)

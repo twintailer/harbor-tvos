@@ -36,7 +36,7 @@ struct MPVTrack: Identifiable, Hashable {
     let external: Bool
 }
 
-final class MPVViewController: UIViewController {
+final class MPVViewController: UIViewController, HarborPlayerController {
     private var mpv: OpaquePointer?
     private let url: URL
     private weak var model: PlayerModel?

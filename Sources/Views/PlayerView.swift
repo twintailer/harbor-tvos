@@ -84,6 +84,7 @@ struct PlayerView: View {
     @AppStorage(SubtitleStyle.Key.subsOff) private var subsOffByDefault = false
     @AppStorage(SubtitleStyle.Key.preferEmbedded) private var preferEmbedded = false
     @AppStorage(SubtitleStyle.Key.defaultSpeed) private var defaultSpeed = 1.0
+    @AppStorage(SubtitleStyle.Key.playerEngine) private var playerEngine = "auto"
     @AppStorage(SubtitleStyle.Key.seekBackStep) private var seekBackStep = 10
     @AppStorage(SubtitleStyle.Key.seekForwardStep) private var seekForwardStep = 10
     @AppStorage(SubtitleStyle.Key.controlsHideSeconds) private var controlsHideSeconds = 5
@@ -122,6 +123,7 @@ struct PlayerView: View {
     private var controlsHidden: Bool { !showInfo && !showOptions }
     private var accent: Color { HarborSettings.accentColor(accentID) }
     private var animeAvailable: Bool {
+        guard !usesVLC else { return false }
         let nested = Bundle.main.urls(forResourcesWithExtension: "glsl", subdirectory: "Anime4K") ?? []
         let root = Bundle.main.urls(forResourcesWithExtension: "glsl", subdirectory: nil) ?? []
         return Set(nested + root).count >= 11
@@ -129,17 +131,25 @@ struct PlayerView: View {
     private var shouldStartAnime4K: Bool {
         anime4KEnabled && animeAvailable && (!anime4KAnimeOnly || target.isAnime)
     }
+    private var usesVLC: Bool { playerEngine == "vlc" }
 
     var body: some View {
         ZStack(alignment: .bottom) {
             Color.black.ignoresSafeArea()
 
-            MPVPlayerView(url: target.url, model: model, startAt: target.startAt,
-                          anime4K: shouldStartAnime4K, requestHeaders: target.requestHeaders)
-                .ignoresSafeArea()
+            if usesVLC {
+                VLCPlayerView(url: target.url, model: model, startAt: target.startAt,
+                              requestHeaders: target.requestHeaders)
+                    .ignoresSafeArea()
+            } else {
+                MPVPlayerView(url: target.url, model: model, startAt: target.startAt,
+                              anime4K: shouldStartAnime4K, requestHeaders: target.requestHeaders)
+                    .ignoresSafeArea()
+            }
 
             // UIKit owns ALL remote input.
             RemoteCatcher(onPress: { handlePress($0) }, onSwipe: { showControls() })
+            RemoteMenuCatcher { handleBack() }
 
             if !model.ready {
                 ProgressView().controlSize(.large).tint(accent)
@@ -212,12 +222,6 @@ struct PlayerView: View {
     private func handlePress(_ type: UIPress.PressType) {
         if showOptions {
             switch type {
-            case .menu:
-                switch panelKind {
-                case .subtitleSettings: openPanel(.subtitles)
-                case .debug: openPanel(.aspect)
-                default: closePanel()
-                }
             case .upArrow: moveOption(-1)
             case .downArrow: moveOption(1)
             case .select: activateOption()
@@ -227,7 +231,6 @@ struct PlayerView: View {
         }
         if controlsHidden {
             switch type {
-            case .menu: requestDismiss()
             case .playPause:
                 if activeSkip != nil, skipButtonVisible { performSkip() } else { toggle() }
             case .select:
@@ -238,8 +241,6 @@ struct PlayerView: View {
         }
         // Bar shown: 2D navigation.
         switch type {
-        case .menu:
-            if scrubbing { cancelScrub() } else { requestDismiss() }
         case .playPause:
             if activeSkip != nil, skipButtonVisible { performSkip() } else { toggle() }
         case .select: activate(selected)
@@ -249,6 +250,30 @@ struct PlayerView: View {
         case .downArrow: vertical(1)
         default: break
         }
+    }
+
+    /// One Back press always moves exactly one UI level. A window-level menu
+    /// recognizer owns the press, so it cannot also fall through to tvOS and
+    /// dismiss the player/app a second time.
+    private func handleBack() {
+        if showOptions {
+            switch panelKind {
+            case .subtitleSettings: openPanel(.subtitles)
+            case .debug: openPanel(.aspect)
+            default: closePanel()
+            }
+            return
+        }
+        if scrubbing {
+            cancelScrub()
+            return
+        }
+        if showInfo {
+            hideTask?.cancel()
+            withAnimation(.easeOut(duration: 0.14)) { showInfo = false }
+            return
+        }
+        requestDismiss()
     }
 
     private var buttonRow: [Control] {
@@ -765,7 +790,12 @@ struct PlayerView: View {
     private func activateOption() {
         let rows = optionRows
         guard optionRow >= 0, optionRow < rows.count, !rows[optionRow].isHeader else { return }
+        let previousPanel = panelKind
         rows[optionRow].action()
+        // A normal choice is committed immediately and the popup disappears,
+        // matching native tvOS menus. Rows that intentionally open a deeper
+        // panel change `panelKind` and therefore remain on screen.
+        if panelKind == previousPanel { closePanel() }
     }
     private func openPanel(_ kind: PanelKind) {
         panelKind = kind
@@ -1129,8 +1159,12 @@ private struct RemoteCatcher: UIViewControllerRepresentable {
             var handled = false
             for press in presses {
                 switch press.type {
-                case .select, .menu, .playPause:
+                case .select, .playPause:
                     onPress?(press.type); handled = true
+                case .menu:
+                    // The window-level RemoteMenuCatcher performs the action;
+                    // consume this responder event so UIKit cannot dismiss too.
+                    handled = true
                 case .upArrow, .downArrow, .leftArrow, .rightArrow:
                     onPress?(press.type); handled = true
                     startRepeat(press.type)
@@ -1183,4 +1217,50 @@ private struct RemoteCatcher: UIViewControllerRepresentable {
             }
         }
     }
+}
+
+/// Captures Menu/Back at window level. This prevents UIKit's presentation
+/// dismissal from racing the player's own one-level-at-a-time back handling.
+private struct RemoteMenuCatcher: UIViewRepresentable {
+    let onMenu: () -> Void
+
+    func makeUIView(context: Context) -> MenuHostView {
+        let view = MenuHostView()
+        view.onMenu = onMenu
+        return view
+    }
+
+    func updateUIView(_ view: MenuHostView, context: Context) { view.onMenu = onMenu }
+    static func dismantleUIView(_ view: MenuHostView, coordinator: ()) { view.removeRecognizer() }
+}
+
+private final class MenuHostView: UIView, UIGestureRecognizerDelegate {
+    var onMenu: () -> Void = {}
+    private var recognizer: UITapGestureRecognizer?
+    private weak var attachedWindow: UIWindow?
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        removeRecognizer()
+        guard let window else { return }
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleMenu))
+        tap.allowedPressTypes = [NSNumber(value: UIPress.PressType.menu.rawValue)]
+        tap.delegate = self
+        window.addGestureRecognizer(tap)
+        recognizer = tap
+        attachedWindow = window
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        true
+    }
+
+    func removeRecognizer() {
+        if let recognizer, let attachedWindow { attachedWindow.removeGestureRecognizer(recognizer) }
+        recognizer = nil
+        attachedWindow = nil
+    }
+
+    @objc private func handleMenu() { onMenu() }
 }

@@ -10,8 +10,8 @@ struct HomeView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 44) {
-                    Text("Harbor")
-                        .font(.system(size: 56, weight: .bold))
+                    Text("Home")
+                        .font(.system(size: 48, weight: .bold))
                         .padding(.horizontal, 60)
                         .padding(.top, 40)
 
@@ -62,6 +62,7 @@ struct ContinueRowView: View {
                 .padding(.vertical, 12)
             }
         }
+        .focusSection()
     }
 }
 
@@ -101,5 +102,6 @@ struct CatalogRowView: View {
                 .padding(.vertical, 12)
             }
         }
+        .focusSection()
     }
 }

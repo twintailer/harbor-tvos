@@ -408,6 +408,7 @@ private struct P2PPanel: View {
 // MARK: - Player & quality
 
 private struct PlayerPanel: View {
+    @AppStorage(SubtitleStyle.Key.playerEngine) private var playerEngine = "auto"
     @AppStorage(SubtitleStyle.Key.videoSize) private var videoSize = "original"
     @AppStorage(SubtitleStyle.Key.defaultSpeed) private var defaultSpeed = 1.0
     @AppStorage(SubtitleStyle.Key.seekBackStep) private var seekBack = 10
@@ -428,9 +429,16 @@ private struct PlayerPanel: View {
     var body: some View {
         List {
             Section("Player engine") {
-                LabeledContent("Engine", value: "mpv · MPVKit")
+                Picker("Preferred engine", selection: $playerEngine) {
+                    Text("Auto · MPV recommended").tag("auto")
+                    Text("MPV · best features").tag("mpv")
+                    Text("VLC · compatibility fallback").tag("vlc")
+                }
+                LabeledContent("Active on next video", value: engineLabel)
                 LabeledContent("Hardware video decode", value: hwdec == "off" ? "Software" : "VideoToolbox")
-                SettingsHint("The native MPV player is used for HLS, MKV, HDR and multichannel audio on Apple TV.")
+                SettingsHint(playerEngine == "vlc"
+                    ? "VLC is useful for streams that stutter or fail in MPV. VLC manages its own subtitle rendering; Anime4K and Harbor's advanced subtitle styling remain MPV-only."
+                    : "MPV provides Harbor's complete feature set: Anime4K, detailed subtitle styling, chapters and the tvOS 26 HDMI audio path. Auto currently prefers MPV.")
             }
             Section("Aspect ratio") {
                 Picker("Video size", selection: $videoSize) {
@@ -489,6 +497,14 @@ private struct PlayerPanel: View {
             }
         }
         .navigationTitle("Player & quality")
+    }
+
+    private var engineLabel: String {
+        switch playerEngine {
+        case "vlc": return "VLC · TVVLCKit"
+        case "mpv": return "MPV · MPVKit"
+        default: return "Auto · MPV"
+        }
     }
 }
 
@@ -826,10 +842,16 @@ private struct ThemePanel: View {
     @AppStorage(SubtitleStyle.Key.posterRadius) private var posterRadius = 12.0
     @AppStorage(SubtitleStyle.Key.rowTitleScale) private var rowTitleScale = 1.0
     @AppStorage(SubtitleStyle.Key.reduceArtworkMotion) private var reduceMotion = false
+    @AppStorage(SubtitleStyle.Key.interfaceStyle) private var interfaceStyle = "harbor"
 
     var body: some View {
         List {
             Section("Theme") {
+                Picker("Interface style", selection: $interfaceStyle) {
+                    Text("Harbor").tag("harbor")
+                    Text("Midnight · Orivio Max").tag("max")
+                    Text("Cinema · Orivio Netflix").tag("netflix")
+                }
                 Picker("Accent", selection: $accent) {
                     ForEach(HarborSettings.accents) { Text($0.label).tag($0.id) }
                 }

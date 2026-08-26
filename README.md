@@ -19,6 +19,11 @@ using the same Stremio account, add-on, catalog, metadata and stream APIs.
   top tab strip
 - Reference-matched Liquid Glass player chrome with floating speed, subtitle,
   audio, aspect and Anime4K menus
+- Deterministic one-column sidebar focus: Back opens the rail, Left/Right or
+  Back closes it, and Up/Down stays in reading order
+- MPV and VLC playback engines (MPV/Anime4K default, TVVLCKit compatibility fallback)
+- Harbor, Orivio Max-inspired Midnight and Orivio Netflix-inspired Cinema styles
+- Window-level player Back handling and auto-closing track/speed menus
 - Skip Intro, Skip Recap and Skip Credits using AniSkip, TheIntroDB and media
   chapters, including independent auto-skip controls
 - Optional torrent playback through a user-hosted TorrServer
@@ -44,7 +49,7 @@ The GitHub workflow builds an unsigned tvOS IPA on a macOS runner:
 gh workflow run tvos-build.yml
 ```
 
-Artifact: `harbor-tvos` → `Harbor_tvOS_0.3.0_unsigned.ipa`.
+Artifact: `harbor-tvos` → `Harbor_tvOS_0.3.1_unsigned.ipa`.
 
 For a local build on macOS, install Pillow and XcodeGen, then run
 `python3 scripts/generate-assets.py`, `bash scripts/fetch-anime4k.sh` and

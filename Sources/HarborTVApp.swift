@@ -12,6 +12,8 @@ struct HarborTVApp: App {
 
     init() {
         HarborSettings.registerDefaults()
+        URLCache.shared.memoryCapacity = 96 * 1024 * 1024
+        URLCache.shared.diskCapacity = 420 * 1024 * 1024
         // Category only — no setActive. The audio output driver activates the session when
         // it starts; a long-form .playback/.moviePlayback category is what tvOS expects
         // from a media app and is safe to declare up front.
@@ -28,39 +30,52 @@ struct HarborTVApp: App {
 struct RootView: View {
     @AppStorage(SubtitleStyle.Key.accent) private var accent = "green"
     @AppStorage(SubtitleStyle.Key.background) private var background = "harbor"
+    @AppStorage(SubtitleStyle.Key.interfaceStyle) private var interfaceStyle = "harbor"
     @State private var selection: HarborSection = .home
+    @State private var sidebarOpen = false
     @FocusState private var sidebarFocus: HarborSection?
 
-    private var sidebarExpanded: Bool { sidebarFocus != nil }
-
     var body: some View {
-        ZStack {
-            backgroundColor.ignoresSafeArea()
+        ZStack(alignment: .leading) {
+            stageColor.ignoresSafeArea()
             HStack(spacing: 0) {
-                Color.clear.frame(width: 96)
+                Color.clear.frame(width: HarborSidebar.collapsedWidth)
                 destination
                     .id(selection)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-
-            if sidebarExpanded {
-                LinearGradient(
-                    stops: [
-                        .init(color: backgroundColor.opacity(0.98), location: 0),
-                        .init(color: backgroundColor.opacity(0.90), location: 0.22),
-                        .init(color: .black.opacity(0.46), location: 0.48),
-                        .init(color: .clear, location: 0.74),
-                    ],
-                    startPoint: .leading, endPoint: .trailing)
-                    .ignoresSafeArea()
-                    .allowsHitTesting(false)
-            }
+            .disabled(sidebarOpen)
+            .allowsHitTesting(!sidebarOpen)
+            .onExitCommand { openSidebar() }
 
             HarborSidebar(selection: $selection, focus: $sidebarFocus,
-                          accent: HarborSettings.accentColor(accent))
+                          expanded: sidebarOpen, accent: sidebarAccent,
+                          interfaceStyle: interfaceStyle) {
+                closeSidebar()
+            }
+            .disabled(!sidebarOpen)
+            .onExitCommand { closeSidebar() }
+            .onMoveCommand { direction in
+                if direction == .left || direction == .right { closeSidebar() }
+            }
+            .onChange(of: sidebarFocus) { old, new in
+                guard sidebarOpen, old == nil, let new, new != selection else { return }
+                sidebarFocus = selection
+            }
         }
-        .tint(HarborSettings.accentColor(accent))
+        .tint(sidebarAccent)
         .preferredColorScheme(.dark)
+    }
+
+    private func openSidebar() {
+        guard !sidebarOpen else { return }
+        sidebarOpen = true
+        DispatchQueue.main.async { sidebarFocus = selection }
+    }
+
+    private func closeSidebar() {
+        sidebarFocus = nil
+        sidebarOpen = false
     }
 
     @ViewBuilder private var destination: some View {
@@ -78,11 +93,21 @@ struct RootView: View {
         }
     }
 
-    private var backgroundColor: Color {
+    private var stageColor: Color {
+        if interfaceStyle == "max" { return .black }
+        if interfaceStyle == "netflix" { return Color(red: 0.027, green: 0.027, blue: 0.027) }
         switch background {
         case "oled": return .black
         case "system": return .black
-        default: return Color(red: 0.035, green: 0.047, blue: 0.065)
+        default: return Color(red: 0.025, green: 0.032, blue: 0.044)
+        }
+    }
+
+    private var sidebarAccent: Color {
+        switch interfaceStyle {
+        case "max": return .white
+        case "netflix": return Color(red: 0.90, green: 0.035, blue: 0.075)
+        default: return HarborSettings.accentColor(accent)
         }
     }
 }
@@ -127,54 +152,70 @@ private enum HarborSection: String, CaseIterable, Identifiable {
 private struct HarborSidebar: View {
     @Binding var selection: HarborSection
     var focus: FocusState<HarborSection?>.Binding
+    let expanded: Bool
     let accent: Color
+    let interfaceStyle: String
+    let onSelected: () -> Void
 
-    private var expanded: Bool { focus.wrappedValue != nil }
-    private var width: CGFloat { expanded ? 330 : 96 }
+    static let collapsedWidth: CGFloat = 116
+    static let expandedWidth: CGFloat = 430
+    private var width: CGFloat { expanded ? Self.expandedWidth : Self.collapsedWidth }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 14) {
-                Image(systemName: "sailboat.fill")
-                    .font(.system(size: 35, weight: .bold))
-                    .foregroundStyle(accent)
-                    .frame(width: 58)
-                Text("Harbor")
-                    .font(.system(size: 34, weight: .bold, design: .rounded))
-                    .opacity(expanded ? 1 : 0)
+        ZStack(alignment: .leading) {
+            if expanded {
+                LinearGradient(stops: [
+                    .init(color: .black.opacity(0.98), location: 0),
+                    .init(color: .black.opacity(0.92), location: 0.28),
+                    .init(color: .black.opacity(0.50), location: 0.48),
+                    .init(color: .clear, location: 0.72),
+                ], startPoint: .leading, endPoint: .trailing)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
             }
-            .frame(height: 72)
-            .padding(.leading, 18)
-            .padding(.bottom, 12)
 
-            ForEach(HarborSection.allCases) { section in
-                Button {
-                    selection = section
-                } label: {
-                    HarborSidebarRow(section: section, selected: selection == section,
-                                     expanded: expanded, accent: accent)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 18) {
+                    Image(systemName: "sailboat.fill")
+                        .font(.system(size: 34, weight: .bold))
+                        .foregroundStyle(accent)
+                        .frame(width: 48)
+                    if expanded {
+                        Text("Harbor")
+                            .font(.system(size: 34, weight: .bold, design: .rounded))
+                    }
                 }
-                .buttonStyle(.plain)
-                .focused(focus, equals: section)
+                .padding(.leading, 34)
+                .frame(height: 68)
+
+                Spacer(minLength: 18)
+
+                ForEach(HarborSection.allCases) { section in
+                    Button {
+                        if selection != section { selection = section }
+                        onSelected()
+                    } label: {
+                        HarborSidebarRow(section: section, selected: selection == section,
+                                         expanded: expanded, accent: accent,
+                                         width: width, interfaceStyle: interfaceStyle)
+                    }
+                    .buttonStyle(.plain)
+                    .focused(focus, equals: section)
+                }
+
+                Spacer(minLength: 18)
             }
-            Spacer(minLength: 0)
+            .defaultFocus(focus, selection)
+            .padding(.vertical, 44)
+            .frame(width: width)
+            .frame(maxHeight: .infinity)
+            .focusSection()
         }
-        .padding(.top, 36)
-        .padding(.bottom, 26)
-        .padding(.horizontal, expanded ? 12 : 8)
-        .frame(width: width, alignment: .leading)
-        .frame(maxHeight: .infinity)
-        .background(expanded ? background.opacity(0.97) : Color.clear)
-        .overlay(alignment: .trailing) {
-            if expanded { Rectangle().fill(.white.opacity(0.08)).frame(width: 1) }
-        }
-        .clipped()
-        .animation(.spring(response: 0.32, dampingFraction: 0.86), value: expanded)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .ignoresSafeArea()
+        .animation(.easeOut(duration: 0.18), value: expanded)
     }
-
-    private var background: Color { Color(red: 0.025, green: 0.032, blue: 0.044) }
 }
 
 private struct HarborSidebarRow: View {
@@ -183,31 +224,35 @@ private struct HarborSidebarRow: View {
     let selected: Bool
     let expanded: Bool
     let accent: Color
+    let width: CGFloat
+    let interfaceStyle: String
 
     private var highlighted: Bool { selected || isFocused }
 
     var body: some View {
         HStack(spacing: 16) {
             Image(systemName: section.icon)
-                .font(.system(size: 27, weight: .semibold))
+                .font(.system(size: 27, weight: selected ? .semibold : .regular))
                 .foregroundStyle(highlighted ? .white : .white.opacity(0.52))
-                .frame(width: 56, height: 56)
+                .frame(width: 44, height: 44)
             Text(section.label)
-                .font(.system(size: 27, weight: selected ? .bold : .medium))
+                .font(.system(size: 28, weight: selected ? .bold : .medium))
                 .foregroundStyle(highlighted ? .white : .white.opacity(0.64))
                 .lineLimit(1)
                 .opacity(expanded ? 1 : 0)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 8)
-        .frame(width: expanded ? 306 : 80, height: 70, alignment: .leading)
+        .padding(.leading, 38)
+        .padding(.trailing, 22)
+        .frame(width: width, height: 58, alignment: .leading)
         .background {
-            Capsule(style: .continuous)
-                .fill(expanded && highlighted ? .white.opacity(isFocused ? 0.18 : 0.10) : .clear)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(expanded && isFocused ? .white.opacity(interfaceStyle == "max" ? 0.18 : 0.14) : .clear)
+                .padding(.horizontal, 18)
         }
         .overlay(alignment: .leading) {
-            if selected {
-                Capsule().fill(accent).frame(width: 4, height: 34).padding(.leading, 2)
+            if expanded && selected {
+                Rectangle().fill(accent).frame(width: 4, height: 30).padding(.leading, 18)
             }
         }
     }

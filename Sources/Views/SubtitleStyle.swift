@@ -71,6 +71,7 @@ enum SubtitleStyle {
         // mpv / picture
         static let mpvQuality = "harbor.mpv.quality"
         static let mpvHWDec = "harbor.mpv.hwdec"
+        static let playerEngine = "harbor.player.engine"
         static let mpvBufferBoost = "harbor.mpv.bufferBoost"
         static let mpvDownmix = "harbor.mpv.downmix"
         static let brightness = "harbor.mpv.brightness"
@@ -100,6 +101,7 @@ enum SubtitleStyle {
         // appearance
         static let accent = "harbor.theme.accent"
         static let background = "harbor.theme.background"
+        static let interfaceStyle = "harbor.theme.interfaceStyle"
         static let posterScale = "harbor.theme.posterScale"
         static let posterRadius = "harbor.theme.posterRadius"
         static let rowTitleScale = "harbor.theme.rowTitleScale"
@@ -405,6 +407,7 @@ enum HarborSettings {
             SubtitleStyle.Key.torrServerURL: "http://192.168.1.10:8090",
             SubtitleStyle.Key.mpvBufferBoost: false,
             SubtitleStyle.Key.mpvDownmix: false,
+            SubtitleStyle.Key.playerEngine: "auto",
             SubtitleStyle.Key.anime4KEnabled: false,
             SubtitleStyle.Key.anime4KAnimeOnly: true,
             SubtitleStyle.Key.anime4KIndicator: true,
@@ -418,6 +421,7 @@ enum HarborSettings {
             SubtitleStyle.Key.showAudioButton: true,
             SubtitleStyle.Key.showAspectButton: true,
             SubtitleStyle.Key.showAnimeButton: true,
+            SubtitleStyle.Key.interfaceStyle: "harbor",
             SubtitleStyle.Key.posterScale: 1.0,
             SubtitleStyle.Key.posterRadius: 12.0,
             SubtitleStyle.Key.rowTitleScale: 1.0,

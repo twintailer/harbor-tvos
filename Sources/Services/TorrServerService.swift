@@ -32,13 +32,13 @@ enum TorrServerService {
         let magnet = "magnet:?xt=urn:btih:\(infoHash)"
         do {
             let acceptedHash = try await add(base: base, magnet: magnet) ?? infoHash
-            var files: [TorrentFile] = []
+            var torrentFiles: [TorrentFile] = []
             for _ in 0..<10 {
-                files = try await files(base: base, hash: acceptedHash)
-                if !files.isEmpty { break }
+                torrentFiles = try await fetchFiles(base: base, hash: acceptedHash)
+                if !torrentFiles.isEmpty { break }
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
-            guard let file = select(files, season: season, episode: episode) else {
+            guard let file = select(torrentFiles, season: season, episode: episode) else {
                 return .failed("TorrServer returned no playable video file")
             }
             var allowed = CharacterSet.alphanumerics
@@ -72,7 +72,7 @@ enum TorrServerService {
         return object["hash"] as? String
     }
 
-    private static func files(base: String, hash: String) async throws -> [TorrentFile] {
+    private static func fetchFiles(base: String, hash: String) async throws -> [TorrentFile] {
         let data = try await post(base: base, body: ["action": "get", "hash": hash])
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let values = object["file_stats"] as? [[String: Any]] else { return [] }

@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct CatalogsView: View {
+    var onRootBack: () -> Void = {}
     @EnvironmentObject private var auth: AuthStore
     @State private var rows: [CatalogRow] = []
     @State private var loading = true
@@ -23,6 +24,7 @@ struct CatalogsView: View {
                 }
                 .padding(.bottom, 60)
             }
+            .onExitCommand(perform: onRootBack)
             .navigationDestination(for: MetaItem.self) { DetailView(item: $0) }
         }
         .task(id: "\(addonRevision)-\(showAllRows)") {
@@ -41,6 +43,7 @@ struct MediaBrowseView: View {
     let title: String
     let type: String
     var fallbackGenre: String? = nil
+    var onRootBack: () -> Void = {}
     @EnvironmentObject private var auth: AuthStore
     @State private var items: [MetaItem] = []
     @State private var loading = true
@@ -65,6 +68,7 @@ struct MediaBrowseView: View {
                 }
                 .padding(.horizontal, 60).padding(.vertical, 36)
             }
+            .onExitCommand(perform: onRootBack)
             .navigationDestination(for: MetaItem.self) { DetailView(item: $0) }
         }
         .task(id: addonRevision) { await load() }

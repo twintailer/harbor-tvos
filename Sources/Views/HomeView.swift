@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct HomeView: View {
+    var onRootBack: () -> Void = {}
+    var onSearch: () -> Void = {}
     @EnvironmentObject private var auth: AuthStore
     @State private var rows: [CatalogRow] = []
     @State private var loading = true
@@ -9,11 +11,12 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 44) {
-                    Text("Home")
-                        .font(.system(size: 48, weight: .bold))
-                        .padding(.horizontal, 60)
-                        .padding(.top, 40)
+                LazyVStack(alignment: .leading, spacing: 44) {
+                    if let featured {
+                        HarborDesktopHero(item: featured, onSearch: onSearch)
+                    } else {
+                        HarborHeroPlaceholder(onSearch: onSearch)
+                    }
 
                     if !auth.continueWatching.isEmpty {
                         ContinueRowView(entries: auth.continueWatching)
@@ -26,6 +29,7 @@ struct HomeView: View {
                 }
                 .padding(.bottom, 60)
             }
+            .onExitCommand(perform: onRootBack)
             .navigationDestination(for: MetaItem.self) { item in
                 DetailView(item: item)
             }
@@ -41,6 +45,136 @@ struct HomeView: View {
 
     private var addonRevision: String {
         auth.addons.map(\.transportUrl).joined(separator: "|")
+    }
+
+    private var featured: MetaItem? {
+        rows.lazy.flatMap(\.items).first(where: { $0.background != nil })
+            ?? rows.first?.items.first
+    }
+}
+
+private struct HarborDesktopHero: View {
+    let item: MetaItem
+    let onSearch: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            HarborArtworkImage(url: item.background ?? item.poster, maxPixelSize: 2200)
+                .frame(maxWidth: .infinity)
+                .frame(height: 530)
+
+            LinearGradient(
+                stops: [
+                    .init(color: Color(red: 0.045, green: 0.05, blue: 0.052).opacity(0.98), location: 0),
+                    .init(color: .black.opacity(0.70), location: 0.34),
+                    .init(color: .clear, location: 0.72),
+                ], startPoint: .leading, endPoint: .trailing
+            )
+            LinearGradient(colors: [.clear, .black.opacity(0.10), Color(red: 0.045, green: 0.05, blue: 0.052)],
+                           startPoint: .top, endPoint: .bottom)
+
+            searchChip
+
+            VStack(alignment: .leading, spacing: 18) {
+                Spacer()
+                Text(item.name)
+                    .font(.system(size: 64, weight: .heavy, design: .rounded))
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                    .frame(maxWidth: 680, alignment: .leading)
+
+                if let description = item.description, !description.isEmpty {
+                    Text(description)
+                        .font(.system(size: 22, weight: .regular))
+                        .foregroundStyle(.white.opacity(0.76))
+                        .lineLimit(3)
+                        .frame(maxWidth: 690, alignment: .leading)
+                }
+
+                HStack(spacing: 14) {
+                    if let release = item.releaseInfo, !release.isEmpty {
+                        Text(release).foregroundStyle(.white.opacity(0.58))
+                    }
+                    if let rating = item.imdbRating, !rating.isEmpty { ImdbBadge(rating: rating) }
+                    if let runtime = item.runtime, !runtime.isEmpty {
+                        Text(runtime).foregroundStyle(.white.opacity(0.58))
+                    }
+                }
+                .font(.system(size: 18, weight: .semibold))
+
+                NavigationLink(value: item) {
+                    Label("Play", systemImage: "play.fill")
+                        .font(.system(size: 21, weight: .bold))
+                        .padding(.horizontal, 25).padding(.vertical, 13)
+                }
+                .buttonStyle(HarborHeroButtonStyle())
+            }
+            .padding(.leading, 64)
+            .padding(.bottom, 38)
+        }
+        .frame(height: 530)
+        .clipped()
+    }
+
+    private var searchChip: some View {
+        HStack {
+            Spacer()
+            Button(action: onSearch) {
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass")
+                    Text("Search movies, shows, people…")
+                }
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(.white.opacity(0.52))
+                .frame(width: 350, height: 46, alignment: .leading)
+                .padding(.horizontal, 18)
+                .background(Capsule().fill(.black.opacity(0.42)))
+                .overlay(Capsule().stroke(.white.opacity(0.08), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            Spacer()
+        }
+        .padding(.top, 22)
+    }
+}
+
+private struct HarborHeroPlaceholder: View {
+    let onSearch: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            Color(red: 0.045, green: 0.05, blue: 0.052)
+            Button(action: onSearch) {
+                Label("Search movies, shows, people…", systemImage: "magnifyingglass")
+                    .font(.system(size: 19, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .padding(.horizontal, 24).frame(height: 50)
+                    .background(Capsule().fill(.white.opacity(0.055)))
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 24)
+        }
+        .frame(height: 190)
+    }
+}
+
+private struct HarborHeroButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HarborHeroButtonBody(configuration: configuration)
+    }
+}
+
+private struct HarborHeroButtonBody: View {
+    let configuration: ButtonStyle.Configuration
+    @Environment(\.isFocused) private var focused
+
+    var body: some View {
+        configuration.label
+            .foregroundStyle(focused ? .black : .white)
+            .background(Capsule().fill(focused ? .white : .black.opacity(0.52)))
+            .overlay(Capsule().stroke(.white.opacity(focused ? 0 : 0.24), lineWidth: 1))
+            .scaleEffect(focused ? 1.06 : 1)
+            .animation(.easeOut(duration: 0.15), value: focused)
     }
 }
 

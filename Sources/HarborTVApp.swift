@@ -32,64 +32,92 @@ struct RootView: View {
     @AppStorage(SubtitleStyle.Key.background) private var background = "harbor"
     @AppStorage(SubtitleStyle.Key.interfaceStyle) private var interfaceStyle = "harbor"
     @State private var selection: HarborSection = .home
-    @State private var sidebarOpen = false
+    @State private var sidebarEnabled = false
     @FocusState private var sidebarFocus: HarborSection?
+
+    private var sidebarExpanded: Bool { sidebarFocus != nil }
 
     var body: some View {
         ZStack(alignment: .leading) {
             stageColor.ignoresSafeArea()
-            HStack(spacing: 0) {
-                Color.clear.frame(width: HarborSidebar.collapsedWidth)
-                destination
-                    .id(selection)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            .disabled(sidebarOpen)
-            .allowsHitTesting(!sidebarOpen)
-            .onExitCommand { openSidebar() }
+            destination
+                .id(selection)
+                .padding(.leading, HarborSidebar.collapsedWidth)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .focusSection()
+                .overlay {
+                    LinearGradient(
+                        stops: [
+                            .init(color: Color(red: 0.055, green: 0.06, blue: 0.065), location: 0),
+                            .init(color: .black.opacity(0.58), location: 0.18),
+                            .init(color: .black.opacity(0.58), location: 1),
+                        ], startPoint: .leading, endPoint: .trailing
+                    )
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+                    .opacity(sidebarExpanded ? 1 : 0)
+                }
 
             HarborSidebar(selection: $selection, focus: $sidebarFocus,
-                          expanded: sidebarOpen, accent: sidebarAccent,
-                          interfaceStyle: interfaceStyle) {
-                closeSidebar()
-            }
-            .disabled(!sidebarOpen)
-            .onExitCommand { closeSidebar() }
+                          accent: sidebarAccent, interfaceStyle: interfaceStyle,
+                          onSelected: select)
+            .disabled(!sidebarEnabled)
+            .focusSection()
+            .onExitCommand { collapseSidebar() }
             .onMoveCommand { direction in
-                if direction == .left || direction == .right { closeSidebar() }
+                if direction == .right { collapseSidebar() }
             }
-            .onChange(of: sidebarFocus) { old, new in
-                guard sidebarOpen, old == nil, let new, new != selection else { return }
-                sidebarFocus = selection
+            .task {
+                // Let the first content card win cold-launch focus. This is the
+                // same focus hand-off used by Orivio and prevents the rail from
+                // opening before a row has rendered.
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                sidebarEnabled = true
             }
         }
+        .animation(.spring(response: 0.34, dampingFraction: 0.86), value: sidebarExpanded)
         .tint(sidebarAccent)
         .preferredColorScheme(.dark)
     }
 
     private func openSidebar() {
-        guard !sidebarOpen else { return }
-        sidebarOpen = true
-        DispatchQueue.main.async { sidebarFocus = selection }
+        sidebarEnabled = true
+        sidebarFocus = selection
     }
 
-    private func closeSidebar() {
+    private func collapseSidebar() {
+        guard sidebarExpanded else { return }
         sidebarFocus = nil
-        sidebarOpen = false
+        sidebarEnabled = false
+        scheduleSidebarReenable()
+    }
+
+    private func select(_ section: HarborSection) {
+        selection = section
+        sidebarFocus = nil
+        sidebarEnabled = false
+        scheduleSidebarReenable()
+    }
+
+    private func scheduleSidebarReenable() {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            sidebarEnabled = true
+        }
     }
 
     @ViewBuilder private var destination: some View {
         switch selection {
-        case .home: HomeView()
-        case .movies: MediaBrowseView(title: "Movies", type: "movie")
-        case .series: MediaBrowseView(title: "Series", type: "series")
-        case .anime: MediaBrowseView(title: "Anime", type: "anime", fallbackGenre: "Animation")
-        case .discover: DiscoverView()
-        case .catalogs: CatalogsView()
-        case .library: LibraryView()
-        case .addons: AddonsView()
-        case .search: SearchView()
-        case .settings: SettingsView()
+        case .home: HomeView(onRootBack: openSidebar, onSearch: { select(.search) })
+        case .movies: MediaBrowseView(title: "Movies", type: "movie", onRootBack: openSidebar)
+        case .series: MediaBrowseView(title: "Series", type: "series", onRootBack: openSidebar)
+        case .anime: MediaBrowseView(title: "Anime", type: "anime", fallbackGenre: "Animation", onRootBack: openSidebar)
+        case .discover: DiscoverView(onRootBack: openSidebar)
+        case .catalogs: CatalogsView(onRootBack: openSidebar)
+        case .library: LibraryView(onRootBack: openSidebar)
+        case .addons: AddonsView(onRootBack: openSidebar)
+        case .search: SearchView(onRootBack: openSidebar)
+        case .settings: SettingsView(onRootBack: openSidebar)
         }
     }
 
@@ -115,6 +143,11 @@ struct RootView: View {
 private enum HarborSection: String, CaseIterable, Identifiable {
     case home, movies, series, anime, discover, catalogs, library, addons, search, settings
     var id: String { rawValue }
+
+    static let sidebarOrder: [HarborSection] = [
+        .home, .discover, .catalogs, .movies, .series, .anime,
+        .library, .addons, .search, .settings,
+    ]
 
     var label: String {
         switch self {
@@ -152,49 +185,40 @@ private enum HarborSection: String, CaseIterable, Identifiable {
 private struct HarborSidebar: View {
     @Binding var selection: HarborSection
     var focus: FocusState<HarborSection?>.Binding
-    let expanded: Bool
     let accent: Color
     let interfaceStyle: String
-    let onSelected: () -> Void
+    let onSelected: (HarborSection) -> Void
 
-    static let collapsedWidth: CGFloat = 116
-    static let expandedWidth: CGFloat = 430
+    static let collapsedWidth: CGFloat = 86
+    static let expandedWidth: CGFloat = 300
+    private var expanded: Bool { focus.wrappedValue != nil }
     private var width: CGFloat { expanded ? Self.expandedWidth : Self.collapsedWidth }
 
     var body: some View {
-        ZStack(alignment: .leading) {
-            if expanded {
-                LinearGradient(stops: [
-                    .init(color: .black.opacity(0.98), location: 0),
-                    .init(color: .black.opacity(0.92), location: 0.28),
-                    .init(color: .black.opacity(0.50), location: 0.48),
-                    .init(color: .clear, location: 0.72),
-                ], startPoint: .leading, endPoint: .trailing)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .ignoresSafeArea()
-                .allowsHitTesting(false)
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 0) {
+            Group {
                 HStack(spacing: 18) {
                     Image(systemName: "sailboat.fill")
-                        .font(.system(size: 34, weight: .bold))
-                        .foregroundStyle(accent)
-                        .frame(width: 48)
+                        .font(.system(size: expanded ? 31 : 34, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 46)
                     if expanded {
                         Text("Harbor")
-                            .font(.system(size: 34, weight: .bold, design: .rounded))
+                            .font(.system(size: 38, weight: .semibold, design: .serif))
+                            .transition(.opacity)
                     }
                 }
-                .padding(.leading, 34)
-                .frame(height: 68)
+                .padding(.leading, expanded ? 18 : 20)
+                .frame(height: 72, alignment: .leading)
+            }
+            .padding(.top, 30)
 
-                Spacer(minLength: 18)
+            Spacer(minLength: 0)
 
-                ForEach(HarborSection.allCases) { section in
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(HarborSection.sidebarOrder) { section in
                     Button {
-                        if selection != section { selection = section }
-                        onSelected()
+                        onSelected(section)
                     } label: {
                         HarborSidebarRow(section: section, selected: selection == section,
                                          expanded: expanded, accent: accent,
@@ -203,18 +227,20 @@ private struct HarborSidebar: View {
                     .buttonStyle(.plain)
                     .focused(focus, equals: section)
                 }
-
-                Spacer(minLength: 18)
             }
             .defaultFocus(focus, selection)
-            .padding(.vertical, 44)
-            .frame(width: width)
-            .frame(maxHeight: .infinity)
-            .focusSection()
+            .padding(.horizontal, expanded ? 12 : 0)
+
+            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .ignoresSafeArea()
-        .animation(.easeOut(duration: 0.18), value: expanded)
+        .frame(width: width, alignment: .leading)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .clipped()
+        .background((expanded ? Color(red: 0.055, green: 0.06, blue: 0.065) : .black.opacity(0.72)).ignoresSafeArea())
+        .animation(.spring(response: 0.34, dampingFraction: 0.86), value: expanded)
+        .onChange(of: expanded) { _, isExpanded in
+            if isExpanded && focus.wrappedValue != selection { focus.wrappedValue = selection }
+        }
     }
 }
 
@@ -232,28 +258,22 @@ private struct HarborSidebarRow: View {
     var body: some View {
         HStack(spacing: 16) {
             Image(systemName: section.icon)
-                .font(.system(size: 27, weight: selected ? .semibold : .regular))
+                .font(.system(size: expanded ? 25 : 29, weight: selected ? .semibold : .regular))
                 .foregroundStyle(highlighted ? .white : .white.opacity(0.52))
-                .frame(width: 44, height: 44)
+                .frame(width: 42, height: 42)
             Text(section.label)
-                .font(.system(size: 28, weight: selected ? .bold : .medium))
+                .font(.system(size: 24, weight: selected ? .semibold : .medium))
                 .foregroundStyle(highlighted ? .white : .white.opacity(0.64))
                 .lineLimit(1)
                 .opacity(expanded ? 1 : 0)
             Spacer(minLength: 0)
         }
-        .padding(.leading, 38)
-        .padding(.trailing, 22)
-        .frame(width: width, height: 58, alignment: .leading)
+        .padding(.leading, expanded ? 16 : 22)
+        .padding(.trailing, 16)
+        .frame(width: expanded ? width - 24 : width, height: 62, alignment: .leading)
         .background {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(expanded && isFocused ? .white.opacity(interfaceStyle == "max" ? 0.18 : 0.14) : .clear)
-                .padding(.horizontal, 18)
-        }
-        .overlay(alignment: .leading) {
-            if expanded && selected {
-                Rectangle().fill(accent).frame(width: 4, height: 30).padding(.leading, 18)
-            }
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(expanded && highlighted ? .white.opacity(interfaceStyle == "max" ? 0.18 : 0.12) : .clear)
         }
     }
 }

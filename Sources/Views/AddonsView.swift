@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct AddonsView: View {
+    var onRootBack: () -> Void = {}
     @EnvironmentObject private var auth: AuthStore
     @State private var refreshing = false
     @State private var addonURL = ""
@@ -59,6 +60,7 @@ struct AddonsView: View {
                 .padding(.horizontal, 60)
                 .padding(.vertical, 40)
             }
+            .onExitCommand(perform: onRootBack)
         }
         .confirmationDialog("Remove this add-on from your Stremio account?",
                             isPresented: Binding(get: { pendingRemovalURL != nil },

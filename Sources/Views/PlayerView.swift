@@ -123,7 +123,6 @@ struct PlayerView: View {
     private var controlsHidden: Bool { !showInfo && !showOptions }
     private var accent: Color { HarborSettings.accentColor(accentID) }
     private var animeAvailable: Bool {
-        guard !usesVLC else { return false }
         let nested = Bundle.main.urls(forResourcesWithExtension: "glsl", subdirectory: "Anime4K") ?? []
         let root = Bundle.main.urls(forResourcesWithExtension: "glsl", subdirectory: nil) ?? []
         return Set(nested + root).count >= 11
@@ -287,7 +286,10 @@ struct PlayerView: View {
         if showSubtitleButton { c.append(.subs) }
         if showAudioButton, !audioTracks.isEmpty { c.append(.audio) }
         if showAspectButton { c.append(.aspect) }
-        if showAnimeButton, animeAvailable { c.append(.anime) }
+        // Anime4K is a video filter, not an anime-only destination. Keep the
+        // control visible for movies and series as requested; automatic startup
+        // may still be limited by the separate "anime only" preference.
+        if showAnimeButton { c.append(.anime) }
         return c
     }
 
@@ -303,11 +305,12 @@ struct PlayerView: View {
         }
     }
 
-    /// Two rows only: scrubber ↔ buttons.
+    /// Two deterministic rows, matching Orivio: timeline ↔ play/pause. Returning
+    /// from the timeline never lands on a stale far-right utility button.
     private func vertical(_ d: Int) {
         commitScrubIfNeeded()
         switch selected {
-        case .scrub: if d > 0 { selected = lastButton }
+        case .scrub: if d > 0 { selected = .play; lastButton = .play }
         default: if d < 0 { selected = .scrub }
         }
         flashControls()
@@ -382,7 +385,7 @@ struct PlayerView: View {
                         if showSubtitleButton { ctrlButton(.subs, "captions.bubble.fill") }
                         if showAudioButton, !audioTracks.isEmpty { ctrlButton(.audio, "waveform.circle.fill") }
                         if showAspectButton { ctrlButton(.aspect, "aspectratio") }
-                        if showAnimeButton, animeAvailable { ctrlButton(.anime, "sparkles") }
+                        if showAnimeButton { ctrlButton(.anime, "sparkles") }
                     }
                 }
 
@@ -653,6 +656,15 @@ struct PlayerView: View {
                 }
             }
         case .anime:
+            if usesVLC {
+                return [
+                    OptionRow(label: "Anime4K needs MPV", detail: "VLC cannot run GLSL shaders", isHeader: true),
+                    OptionRow(label: "Use MPV next playback", isSelected: false) { playerEngine = "mpv" },
+                ]
+            }
+            if !animeAvailable {
+                return [OptionRow(label: "Anime4K shaders are missing", isHeader: true)]
+            }
             var rows = [OptionRow(label: "Off", isSelected: !animeActive) {
                 animeActive = false
                 model.controller?.setAnime4K(false)
@@ -1151,10 +1163,6 @@ private struct RemoteCatcher: UIViewControllerRepresentable {
             if g.state == .began { onSwipe?() }
         }
 
-        private var repeatTimer: Timer?
-        private var repeatType: UIPress.PressType?
-        private var repeatCount = 0
-
         override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
             var handled = false
             for press in presses {
@@ -1167,19 +1175,16 @@ private struct RemoteCatcher: UIViewControllerRepresentable {
                     handled = true
                 case .upArrow, .downArrow, .leftArrow, .rightArrow:
                     onPress?(press.type); handled = true
-                    startRepeat(press.type)
                 default: break
                 }
             }
             if !handled { super.pressesBegan(presses, with: event) }
         }
         override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-            stopRepeat()
             let unhandled = Set(presses.filter { !captures($0.type) })
             if !unhandled.isEmpty { super.pressesEnded(unhandled, with: event) }
         }
         override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-            stopRepeat()
             let unhandled = Set(presses.filter { !captures($0.type) })
             if !unhandled.isEmpty { super.pressesCancelled(unhandled, with: event) }
         }
@@ -1190,21 +1195,6 @@ private struct RemoteCatcher: UIViewControllerRepresentable {
             default: return false
             }
         }
-
-        private func startRepeat(_ type: UIPress.PressType) {
-            stopRepeat()
-            repeatType = type; repeatCount = 0
-            let timer = Timer(timeInterval: 0.12, repeats: true) { [weak self] t in
-                guard let self, let type = self.repeatType else { t.invalidate(); return }
-                self.repeatCount += 1
-                if self.repeatCount > 120 { self.stopRepeat(); return }
-                self.onPress?(type)
-            }
-            timer.fireDate = Date().addingTimeInterval(0.45)
-            RunLoop.main.add(timer, forMode: .common)
-            repeatTimer = timer
-        }
-        private func stopRepeat() { repeatTimer?.invalidate(); repeatTimer = nil; repeatType = nil }
 
         override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
             super.didUpdateFocus(in: context, with: coordinator)

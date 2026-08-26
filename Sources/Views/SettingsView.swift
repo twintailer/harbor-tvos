@@ -5,6 +5,8 @@ import SwiftUI
 // desktop/Android, while desktop-only window, tray and keyboard sections are omitted.
 // Every control in this file is backed by a consumer in the tvOS UI, stream picker or mpv.
 struct SettingsView: View {
+    var onRootBack: () -> Void = {}
+
     var body: some View {
         NavigationStack {
             List {
@@ -84,6 +86,7 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
+            .onExitCommand(perform: onRootBack)
         }
     }
 }

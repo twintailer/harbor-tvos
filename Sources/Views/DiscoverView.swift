@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct DiscoverView: View {
+    var onRootBack: () -> Void = {}
     @State private var type = "movie"
     @State private var items: [MetaItem] = []
     @State private var loading = true
@@ -49,6 +50,7 @@ struct DiscoverView: View {
                 }
                 .padding(.bottom, 60)
             }
+            .onExitCommand(perform: onRootBack)
             .navigationDestination(for: MetaItem.self) { DetailView(item: $0) }
         }
         .task(id: "\(type)-\(genre)-\(addonRevision)") { await load() }

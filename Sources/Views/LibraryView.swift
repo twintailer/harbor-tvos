@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct LibraryView: View {
+    var onRootBack: () -> Void = {}
     @EnvironmentObject private var auth: AuthStore
     @AppStorage(SubtitleStyle.Key.libraryBookmarkedOnly) private var bookmarkedOnly = true
     @AppStorage(SubtitleStyle.Key.librarySort) private var sort = "recent"
@@ -91,6 +92,7 @@ struct LibraryView: View {
                 .padding(.horizontal, 60)
                 .padding(.vertical, 36)
             }
+            .onExitCommand(perform: onRootBack)
             .navigationDestination(for: MetaItem.self) { DetailView(item: $0) }
         }
         .task { if auth.isSignedIn && auth.libraryItems.isEmpty { loading = true; await auth.loadLibrary(); loading = false } }

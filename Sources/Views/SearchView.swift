@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct SearchView: View {
+    var onRootBack: () -> Void = {}
     @EnvironmentObject private var auth: AuthStore
     @State private var query = ""
     @State private var results: [MetaItem] = []
@@ -17,6 +18,7 @@ struct SearchView: View {
                 }
                 .padding(60)
             }
+            .onExitCommand(perform: onRootBack)
             .navigationDestination(for: MetaItem.self) { DetailView(item: $0) }
         }
         .searchable(text: $query, prompt: "Search movies & series")

@@ -23,10 +23,15 @@ struct SearchView: View {
         }
         .searchable(text: $query, prompt: "Search movies & series")
         .task(id: "\(query)|\(addonRevision)") {
-            guard query.count >= 2 else { results = []; return }
+            let requestedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard requestedQuery.count >= 2 else { results = []; return }
             try? await Task.sleep(nanoseconds: 350_000_000)
             if Task.isCancelled { return }
-            let hits = await AddonService.search(addons: auth.addons, query: query)
+            let hits = await AddonService.search(addons: auth.addons, query: requestedQuery)
+            // A cancelled network request can still finish after the next query.
+            // Never let those stale results replace the current search.
+            guard !Task.isCancelled,
+                  requestedQuery == query.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
             await MainActor.run { results = hits }
         }
     }

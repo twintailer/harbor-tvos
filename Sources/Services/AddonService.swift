@@ -75,13 +75,18 @@ enum AddonService {
     }
 
     static func search(addons: [Addon], query: String) async -> [MetaItem] {
-        let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? query
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        var pathCharacters = CharacterSet.urlPathAllowed
+        pathCharacters.remove(charactersIn: "/?#")
+        let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: pathCharacters) ?? trimmed
         let sources = addons.flatMap { addon in
             (addon.manifest?.catalogs ?? []).filter {
                 ["movie", "series", "anime"].contains($0.type)
+                    && ($0.extra ?? []).contains(where: { $0.name.caseInsensitiveCompare("search") == .orderedSame })
             }.prefix(8).map { (addon.base, $0.type, $0.id) }
         }
-        guard !sources.isEmpty else { return await CatalogService.search(query: query) }
+        guard !sources.isEmpty else { return await CatalogService.search(query: trimmed) }
         var combined: [MetaItem] = []
         await withTaskGroup(of: [MetaItem].self) { group in
             for (base, type, id) in sources {
@@ -96,8 +101,19 @@ enum AddonService {
             for await result in group { combined.append(contentsOf: result) }
         }
         var seen = Set<String>()
-        let unique = combined.filter { seen.insert("\($0.type):\($0.id)").inserted }
-        return unique.isEmpty ? await CatalogService.search(query: query) : unique
+        let unique = combined.filter {
+            isRelevantSearchResult($0, query: trimmed)
+                && seen.insert("\($0.type):\($0.id)").inserted
+        }
+        return unique.isEmpty ? await CatalogService.search(query: trimmed) : unique
+    }
+
+    private static func isRelevantSearchResult(_ item: MetaItem, query: String) -> Bool {
+        let normalizedName = item.name.folding(options: [.caseInsensitive, .diacriticInsensitive],
+                                               locale: .current)
+        let tokens = query.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .split(whereSeparator: { $0.isWhitespace })
+        return !tokens.isEmpty && tokens.allSatisfy { normalizedName.contains($0) }
     }
 
     private static func metaFrom(base: String, type: String, id: String) async -> MetaItem? {

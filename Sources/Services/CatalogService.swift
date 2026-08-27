@@ -37,7 +37,17 @@ enum CatalogService {
         async let movieHits = fetchSearch(type: "movie", query: enc)
         async let seriesHits = fetchSearch(type: "series", query: enc)
         let (movies, series) = await (movieHits, seriesHits)
-        return movies + series
+        let normalizedQuery = query.folding(options: [.caseInsensitive, .diacriticInsensitive],
+                                            locale: .current)
+        let tokens = normalizedQuery.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        var seen = Set<String>()
+        return (movies + series).filter { item in
+            let name = item.name.folding(options: [.caseInsensitive, .diacriticInsensitive],
+                                         locale: .current)
+            return item.name != "#DUPE#"
+                && tokens.allSatisfy { name.contains($0) }
+                && seen.insert("\(item.type):\(item.id)").inserted
+        }
     }
 
     private static func fetchSearch(type: String, query: String) async -> [MetaItem] {

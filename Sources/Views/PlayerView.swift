@@ -112,7 +112,7 @@ struct PlayerView: View {
     @AppStorage(SubtitleStyle.Key.showAspectButton) private var showAspectButton = true
     @AppStorage(SubtitleStyle.Key.showAnimeButton) private var showAnimeButton = true
 
-    private enum Control: Hashable { case scrub, restart, back, play, fwd, next, audio, subs, aspect, speed, anime }
+    private enum Control: Hashable { case skip, upNext, restart, back, play, fwd, next, audio, subs, aspect, speed, anime, scrub }
     private enum PanelKind { case audio, subtitles, subtitleSettings, aspect, speed, anime, debug }
     @State private var selected: Control = .play
     @State private var lastButton: Control = .play
@@ -188,6 +188,7 @@ struct PlayerView: View {
             monitorAudioOutput()
             loadIntroSkipIfNeeded()
             updateActiveSkip(at: position)
+            if selected == .upNext && !upNextActive { selected = .play }
             if model.duration > 0, position > 0, abs(position - lastSavedPosition) >= 30 {
                 lastSavedPosition = position
                 target.onProgress?(position, model.duration)
@@ -233,7 +234,13 @@ struct PlayerView: View {
             case .playPause:
                 if activeSkip != nil, skipButtonVisible { performSkip() } else { toggle() }
             case .select:
-                if activeSkip != nil, skipButtonVisible { performSkip() } else { showControls() }
+                if activeSkip != nil, skipButtonVisible {
+                    performSkip()
+                } else if upNextActive {
+                    playNextNow()
+                } else {
+                    showControls()
+                }
             default: showControls()
             }
             return
@@ -296,6 +303,7 @@ struct PlayerView: View {
     private func horizontal(_ d: Int) {
         switch selected {
         case .scrub: scrubBy(d)
+        case .skip, .upNext: flashControls()
         default:
             let row = buttonRow
             let i = row.firstIndex(of: selected) ?? 0
@@ -305,21 +313,38 @@ struct PlayerView: View {
         }
     }
 
-    /// Two deterministic rows, matching Orivio: timeline ↔ play/pause. Returning
-    /// from the timeline never lands on a stale far-right utility button.
+    /// Visual order is action pill (when present) → controls → timeline. Remote
+    /// directions follow that exact geometry: DOWN from a button reaches the
+    /// timeline, while UP from the timeline returns to play/pause.
     private func vertical(_ d: Int) {
         commitScrubIfNeeded()
         switch selected {
-        case .scrub: if d > 0 { selected = .play; lastButton = .play }
-        default: if d < 0 { selected = .scrub }
+        case .scrub:
+            if d < 0 { selected = .play; lastButton = .play }
+        case .skip, .upNext:
+            if d > 0 { selected = .play; lastButton = .play }
+        default:
+            if d > 0 {
+                selected = .scrub
+            } else if d < 0, let action = visibleActionControl {
+                selected = action
+            }
         }
         flashControls()
+    }
+
+    private var visibleActionControl: Control? {
+        if activeSkip != nil, skipButtonVisible, showSkipButton { return .skip }
+        if upNextActive { return .upNext }
+        return nil
     }
 
     private func activate(_ c: Control) {
         switch c {
         case .scrub:   scrubbing ? commitScrub() : toggle()
-        case .restart: requestDismiss()
+        case .skip:    performSkip()
+        case .upNext:  playNextNow()
+        case .restart: restart()
         case .back:    seek(-Double(seekBackStep))
         case .fwd:     seek(Double(seekForwardStep))
         case .play:    toggle()
@@ -456,6 +481,7 @@ struct PlayerView: View {
     }
 
     private func skipPill(_ segment: SkipSegment) -> some View {
+        let focused = selected == .skip || controlsHidden
         VStack {
             Spacer()
             HStack {
@@ -465,12 +491,14 @@ struct PlayerView: View {
                     Text(segment.label)
                 }
                 .font(.system(size: 23, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(focused ? .black : .white)
                 .padding(.horizontal, 24)
                 .padding(.vertical, 14)
-                .harborGlass(cornerRadius: 30, tint: Color.black.opacity(0.18))
-                .overlay(Capsule().stroke(.white.opacity(0.30), lineWidth: 1))
+                .background(Capsule().fill(focused ? .white : .clear))
+                .harborGlass(cornerRadius: 30, tint: focused ? .white.opacity(0.72) : Color.black.opacity(0.18))
+                .overlay(Capsule().stroke(.white.opacity(focused ? 0.92 : 0.30), lineWidth: focused ? 2 : 1))
                 .shadow(color: .black.opacity(0.45), radius: 18, y: 9)
+                .scaleEffect(focused ? 1.06 : 1)
             }
             .padding(.trailing, 68)
             .padding(.bottom, showInfo ? 355 : 46)
@@ -486,6 +514,7 @@ struct PlayerView: View {
     }
 
     private var upNextPill: some View {
+        let focused = selected == .upNext || controlsHidden
         VStack {
             Spacer()
             HStack {
@@ -497,11 +526,13 @@ struct PlayerView: View {
                         Text("Next Episode").font(.system(size: 23, weight: .bold))
                     }
                 }
-                .foregroundStyle(.white)
+                .foregroundStyle(focused ? .black : .white)
                 .padding(.horizontal, 24).padding(.vertical, 13)
-                .harborGlass(cornerRadius: 28, tint: Color.black.opacity(0.18))
-                .overlay(Capsule().stroke(.white.opacity(0.30), lineWidth: 1))
+                .background(Capsule().fill(focused ? .white : .clear))
+                .harborGlass(cornerRadius: 28, tint: focused ? .white.opacity(0.72) : Color.black.opacity(0.18))
+                .overlay(Capsule().stroke(.white.opacity(focused ? 0.92 : 0.30), lineWidth: focused ? 2 : 1))
                 .shadow(color: .black.opacity(0.45), radius: 18, y: 9)
+                .scaleEffect(focused ? 1.06 : 1)
             }
             .padding(.trailing, 68)
             .padding(.bottom, showInfo ? 355 : 46)
@@ -984,6 +1015,7 @@ struct PlayerView: View {
                 activeSkip = nil
                 skipButtonVisible = false
                 skipHideTask?.cancel()
+                if selected == .skip { selected = .play }
             }
             return
         }
@@ -992,6 +1024,7 @@ struct PlayerView: View {
             autoSkippedSegments.insert(segment.id)
             activeSkip = nil
             skipButtonVisible = false
+            if selected == .skip { selected = .play }
             model.controller?.seekAbsolute(segment.end)
             model.position = segment.end
             flashControls()
@@ -1007,6 +1040,7 @@ struct PlayerView: View {
             try? await Task.sleep(nanoseconds: UInt64(skipButtonHideSec) * 1_000_000_000)
             guard !Task.isCancelled, activeSkip?.id == segment.id else { return }
             withAnimation { skipButtonVisible = false }
+            if selected == .skip { selected = .play }
         }
     }
 
@@ -1025,6 +1059,7 @@ struct PlayerView: View {
         model.position = segment.end
         activeSkip = nil
         skipButtonVisible = false
+        if selected == .skip { selected = .play }
         skipHideTask?.cancel()
         flashControls()
     }

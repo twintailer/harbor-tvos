@@ -146,6 +146,13 @@ struct Addon: Codable {
         let type: String
         let id: String
         let name: String?
+        /// Stremio catalogs declare the URL extras they actually support. A
+        /// catalog without `search` often ignores `/search=...` and returns its
+        /// normal top list, which made Harbor show unrelated titles as results.
+        let extra: [CatalogExtra]?
+    }
+    struct CatalogExtra: Codable, Hashable {
+        let name: String
     }
     // resources can be plain strings ("stream") or objects ({name:"stream", types, idPrefixes}).
     struct Resource: Codable {

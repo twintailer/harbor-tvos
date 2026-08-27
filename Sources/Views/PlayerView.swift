@@ -482,7 +482,7 @@ struct PlayerView: View {
 
     private func skipPill(_ segment: SkipSegment) -> some View {
         let focused = selected == .skip || controlsHidden
-        VStack {
+        return VStack {
             Spacer()
             HStack {
                 Spacer()
@@ -515,7 +515,7 @@ struct PlayerView: View {
 
     private var upNextPill: some View {
         let focused = selected == .upNext || controlsHidden
-        VStack {
+        return VStack {
             Spacer()
             HStack {
                 Spacer()

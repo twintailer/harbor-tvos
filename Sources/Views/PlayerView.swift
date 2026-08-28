@@ -38,6 +38,10 @@ struct PlayerView: View {
     @State private var audioCodec = ""
     @State private var audioOut = ""
     @State private var appliedAutoTracks = false
+    @State private var appliedDefaultSpeed = false
+    @State private var appliedAudioLanguage = false
+    @State private var appliedSubtitleLanguage = false
+    @State private var autoTrackAttempts = 0
     @State private var lastTrackRefresh = Date.distantPast
     @State private var animeActive = false
     @State private var confirmingLeave = false
@@ -713,7 +717,10 @@ struct PlayerView: View {
     }
 
     private func groupedTrackRows(_ tracks: [MPVTrack], selectedID: Int?, select: @escaping (Int) -> Void) -> [OptionRow] {
-        let groups = Dictionary(grouping: tracks) { $0.lang.isEmpty ? "und" : $0.lang.lowercased() }
+        let groups = Dictionary(grouping: tracks) {
+            SubtitleStyle.languageID(code: $0.lang, title: $0.title)
+                ?? ($0.lang.isEmpty ? "und" : $0.lang.lowercased())
+        }
         var rows: [OptionRow] = []
         for code in groups.keys.sorted(by: { langName($0) < langName($1) }) {
             let ts = groups[code]!
@@ -736,7 +743,9 @@ struct PlayerView: View {
     private func langName(_ code: String) -> String {
         let c = code.lowercased()
         if c.isEmpty || c == "und" { return "Unknown" }
-        return Locale.current.localizedString(forLanguageCode: c)?.capitalized ?? code.uppercased()
+        if let preset = SubtitleStyle.languages.first(where: { $0.id == c }) { return preset.label }
+        let base = c.replacingOccurrences(of: "_", with: "-").split(separator: "-").first.map(String.init) ?? c
+        return Locale.current.localizedString(forLanguageCode: base)?.capitalized ?? code.uppercased()
     }
 
     private var panelTitle: String {
@@ -942,34 +951,68 @@ struct PlayerView: View {
     /// (tracks aren't known until decode starts).
     private func maybeAutoSelectTracks() {
         guard model.ready, !appliedAutoTracks else { return }
-        if Date().timeIntervalSince(lastTrackRefresh) < 0.5 { return }
+        if Date().timeIntervalSince(lastTrackRefresh) < 0.75 { return }
         lastTrackRefresh = Date()
+        autoTrackAttempts += 1
         refreshTracks()
-        guard !(audioTracks.isEmpty && subtitleTracks.isEmpty) else { return }
-        appliedAutoTracks = true
 
         // Default playback speed.
-        if abs(defaultSpeed - 1.0) > 0.01 { speed = defaultSpeed; model.controller?.setSpeed(defaultSpeed) }
+        if !appliedDefaultSpeed {
+            appliedDefaultSpeed = true
+            if abs(defaultSpeed - 1.0) > 0.01 {
+                speed = defaultSpeed
+                model.controller?.setSpeed(defaultSpeed)
+            }
+        }
 
-        // Preferred audio language.
-        if !prefAudioLang.isEmpty, let a = audioTracks.first(where: { $0.lang.lowercased().hasPrefix(prefAudioLang) }) {
-            setAudio(a.id)
+        // Preferred audio language. Retry briefly because some containers publish
+        // their track list after playback has already become ready.
+        if !appliedAudioLanguage {
+            if prefAudioLang.isEmpty {
+                appliedAudioLanguage = true
+            } else if let track = audioTracks.first(where: {
+                SubtitleStyle.languageMatches(prefAudioLang, code: $0.lang, title: $0.title)
+            }) {
+                appliedAudioLanguage = true
+                setAudio(track.id)
+            } else if autoTrackAttempts >= 16 {
+                appliedAudioLanguage = true
+            }
         }
-        // Subtitles: off by default, or preferred language.
-        if subsOffByDefault {
-            setSub(-1)
-        } else {
-            let primary = subtitleTracks.filter { prefSubLang.isEmpty || $0.lang.lowercased().hasPrefix(prefSubLang) }
-            let secondary = subtitleTracks.filter { !secondarySubLang.isEmpty && $0.lang.lowercased().hasPrefix(secondarySubLang) }
-            let ordered = primary + secondary
-            let forced = preferForcedSubs ? ordered.first(where: {
-                $0.title.localizedCaseInsensitiveContains("forced")
-                    || $0.title.localizedCaseInsensitiveContains("signs")
-            }) : nil
-            let embedded = preferEmbedded ? ordered.first(where: { !$0.external }) : nil
-            if let track = forced ?? embedded ?? ordered.first { setSub(track.id) }
+
+        if !appliedSubtitleLanguage {
+            if subsOffByDefault {
+                appliedSubtitleLanguage = true
+                setSub(-1)
+            } else {
+                let primary = subtitleTracks.filter {
+                    !prefSubLang.isEmpty
+                        && SubtitleStyle.languageMatches(prefSubLang, code: $0.lang, title: $0.title)
+                }
+                let secondary = subtitleTracks.filter {
+                    !secondarySubLang.isEmpty
+                        && SubtitleStyle.languageMatches(secondarySubLang, code: $0.lang, title: $0.title)
+                        && !primary.contains($0)
+                }
+                let hasExplicitPreference = !prefSubLang.isEmpty || !secondarySubLang.isEmpty
+                let ordered = hasExplicitPreference ? primary + secondary : subtitleTracks
+                let forced = preferForcedSubs ? ordered.first(where: {
+                    $0.title.localizedCaseInsensitiveContains("forced")
+                        || $0.title.localizedCaseInsensitiveContains("signs")
+                }) : nil
+                let embedded = preferEmbedded ? ordered.first(where: { !$0.external }) : nil
+                if let track = forced ?? embedded ?? ordered.first {
+                    appliedSubtitleLanguage = true
+                    setSub(track.id)
+                } else if autoTrackAttempts >= 16 {
+                    appliedSubtitleLanguage = true
+                    // Do not silently leave an automatically selected English track active
+                    // when the user explicitly requested German (or another language).
+                    if hasExplicitPreference { setSub(-1) }
+                }
+            }
         }
-        refreshTracksSoon()
+        appliedAutoTracks = appliedAudioLanguage && appliedSubtitleLanguage
     }
 
     // MARK: - Playback helpers

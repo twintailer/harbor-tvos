@@ -186,6 +186,72 @@ enum SubtitleStyle {
         .init(id: "rus", label: "Russian"),
         .init(id: "tur", label: "Turkish"),
     ]
+
+    /// Stremio add-ons and container metadata mix ISO-639-1, bibliographic
+    /// ISO-639-2 and terminologic ISO-639-2 codes (for example de/ger/deu).
+    /// Keep every spelling in one place so settings, mpv and VLC agree.
+    static func languageCodes(for id: String) -> [String] {
+        switch id.lowercased() {
+        case "eng": return ["en", "eng"]
+        case "ger": return ["de", "deu", "ger"]
+        case "spa": return ["es", "spa"]
+        case "fre": return ["fr", "fra", "fre"]
+        case "ita": return ["it", "ita"]
+        case "jpn": return ["ja", "jpn"]
+        case "por": return ["pt", "por"]
+        case "ara": return ["ar", "ara"]
+        case "kor": return ["ko", "kor"]
+        case "chi": return ["zh", "zho", "chi"]
+        case "dut": return ["nl", "nld", "dut"]
+        case "pol": return ["pl", "pol"]
+        case "rus": return ["ru", "rus"]
+        case "tur": return ["tr", "tur"]
+        default: return []
+        }
+    }
+
+    static func languageMatches(_ id: String, code: String, title: String) -> Bool {
+        guard !id.isEmpty else { return false }
+        let normalizedCode = code.lowercased().replacingOccurrences(of: "_", with: "-")
+        let baseCode = normalizedCode.split(separator: "-").first.map(String.init) ?? normalizedCode
+        let codes = languageCodes(for: id)
+        if codes.contains(normalizedCode) || codes.contains(baseCode) { return true }
+
+        // Only trust a title-based guess when the container did not provide a usable
+        // language code. This covers tracks named "Deutsch" / "German" with lang=und.
+        guard normalizedCode.isEmpty || ["und", "unk", "mul", "zxx"].contains(baseCode) else {
+            return false
+        }
+        let foldedTitle = title.folding(options: [.caseInsensitive, .diacriticInsensitive],
+                                        locale: Locale(identifier: "en_US_POSIX")).lowercased()
+        return languageNames(for: id).contains { foldedTitle.contains($0) }
+    }
+
+    static func languageID(code: String, title: String = "") -> String? {
+        languages.lazy.map(\.id).first {
+            !$0.isEmpty && languageMatches($0, code: code, title: title)
+        }
+    }
+
+    private static func languageNames(for id: String) -> [String] {
+        switch id.lowercased() {
+        case "eng": return ["english", "englisch"]
+        case "ger": return ["german", "deutsch"]
+        case "spa": return ["spanish", "espanol", "spanisch"]
+        case "fre": return ["french", "francais", "franzosisch"]
+        case "ita": return ["italian", "italiano", "italienisch"]
+        case "jpn": return ["japanese", "japanisch", "日本語"]
+        case "por": return ["portuguese", "portugues", "portugiesisch"]
+        case "ara": return ["arabic", "arabisch", "العربية"]
+        case "kor": return ["korean", "koreanisch", "한국어"]
+        case "chi": return ["chinese", "mandarin", "chinesisch", "中文"]
+        case "dut": return ["dutch", "nederlands", "niederlandisch"]
+        case "pol": return ["polish", "polski", "polnisch"]
+        case "rus": return ["russian", "russisch", "русский"]
+        case "tur": return ["turkish", "turkce", "turkisch"]
+        default: return []
+        }
+    }
     static let speeds: [Double] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
     static let seekSteps: [Int] = [5, 10, 15, 30]
 

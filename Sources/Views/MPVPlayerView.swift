@@ -191,6 +191,7 @@ final class MPVViewController: UIViewController, HarborPlayerController {
         setOpt("subs-fallback", "yes")
         setOpt("embeddedfonts", "yes")
         setOpt("sub-auto", "fuzzy")
+        applyPreferredLanguageOptions(defaults)
         for (name, value) in SubtitleStyle.mpvOptions { setOpt(name, value) }
         applyVideoSize(setOpt)
         if startAt > 1 { setOpt("start", String(format: "%.3f", startAt)) }
@@ -415,6 +416,25 @@ final class MPVViewController: UIViewController, HarborPlayerController {
         }
         if !filters.isEmpty { setOpt("af", filters.joined(separator: ",")) }
         if defaults.bool(forKey: SubtitleStyle.Key.mpvDownmix) { setOpt("audio-channels", "stereo") }
+    }
+
+    private func applyPreferredLanguageOptions(_ defaults: UserDefaults) {
+        let audioID = defaults.string(forKey: SubtitleStyle.Key.audioLang) ?? ""
+        let audioCodes = SubtitleStyle.languageCodes(for: audioID)
+        if !audioCodes.isEmpty { setOpt("alang", audioCodes.joined(separator: ",")) }
+
+        if defaults.bool(forKey: SubtitleStyle.Key.subsOff) {
+            setOpt("sid", "no")
+            return
+        }
+        let primaryID = defaults.string(forKey: SubtitleStyle.Key.subLang) ?? ""
+        let secondaryID = defaults.string(forKey: SubtitleStyle.Key.secondarySubLang) ?? ""
+        var subtitleCodes: [String] = []
+        for code in SubtitleStyle.languageCodes(for: primaryID)
+            + SubtitleStyle.languageCodes(for: secondaryID) where !subtitleCodes.contains(code) {
+            subtitleCodes.append(code)
+        }
+        if !subtitleCodes.isEmpty { setOpt("slang", subtitleCodes.joined(separator: ",")) }
     }
 
     private func applyRequestHeaders() {

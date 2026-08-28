@@ -341,8 +341,9 @@ enum HarborSettings {
         Choice(id: "C+A", label: "Mode C+A", detail: "Strong upscale and restore"),
     ]
     static let animeTiers = [
-        Choice(id: "fast", label: "Performance", detail: "M shaders"),
-        Choice(id: "hq", label: "High quality", detail: "VL shaders"),
+        Choice(id: "fast", label: "Apple TV performance", detail: "A reduced S-shader pipeline for the smoothest playback. Recommended."),
+        Choice(id: "balanced", label: "Balanced", detail: "The fuller M/S low-end pipeline. Sharper, but needs substantially more GPU time."),
+        Choice(id: "hq", label: "Maximum quality", detail: "The full VL/M pipeline. Intended only for the fastest Apple TV 4K models."),
     ]
     static let streamFilters = [
         Choice(id: "strict", label: "Strict", detail: "Hide suspicious and unsupported results"),
@@ -411,6 +412,8 @@ enum HarborSettings {
             SubtitleStyle.Key.anime4KEnabled: false,
             SubtitleStyle.Key.anime4KAnimeOnly: true,
             SubtitleStyle.Key.anime4KIndicator: true,
+            SubtitleStyle.Key.anime4KMode: "A",
+            SubtitleStyle.Key.anime4KTier: "fast",
             SubtitleStyle.Key.motionInterpolation: false,
             SubtitleStyle.Key.showQualityInfo: true,
             SubtitleStyle.Key.showRestartButton: true,

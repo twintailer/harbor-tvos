@@ -150,30 +150,29 @@ final class MPVViewController: UIViewController, HarborPlayerController {
     private func setupMPV() {
         guard let layer = metalLayer, let ctx = mpv_create() else { return }
         mpv = ctx
-        // Tune the bundled mpv for the selected Apple TV quality profile.
+        // Tune the bundled mpv for the selected Apple TV quality profile. Anime4K
+        // performs its own scaling, so stacking gpu-hq on top only wastes GPU time.
         let defaults = UserDefaults.standard
-        switch defaults.string(forKey: SubtitleStyle.Key.mpvQuality) ?? "balanced" {
-        case "quality":
+        if (defaults.string(forKey: SubtitleStyle.Key.mpvQuality) ?? "balanced") == "quality",
+           !anime4KActive {
             mpv_set_option_string(ctx, "profile", "gpu-hq")
-            setOpt("scale", "ewa_lanczossharp")
-            setOpt("cscale", "ewa_lanczossoft")
-        case "performance":
+        } else {
             mpv_set_option_string(ctx, "profile", "fast")
-            setOpt("scale", "bilinear")
-            setOpt("cscale", "bilinear")
-        default:
-            mpv_set_option_string(ctx, "profile", "fast")
-            setOpt("scale", "spline36")
-            setOpt("cscale", "spline36")
         }
-        // Keep audio-driver diagnostics visible on the Apple TV. MPVKit 1.0.0's
+        applyQualityScaling(defaults, set: setOpt)
+        // Warnings retain useful audio-driver diagnostics without streaming routine
+        // decoder messages through SwiftUI while a demanding shader is running.
         // AVFoundation fallback is selected below specifically for tvOS HDMI routes.
-        mpv_request_log_messages(ctx, "info")
+        mpv_request_log_messages(ctx, "warn")
         var wid = Int64(Int(bitPattern: Unmanaged.passUnretained(layer).toOpaque()))
         mpv_set_option(ctx, "wid", MPV_FORMAT_INT64, &wid)
         setOpt("vo", "gpu-next")
         setOpt("gpu-api", "vulkan")
         setOpt("gpu-context", "moltenvk")
+        setOpt("gpu-shader-cache", "yes")
+        if let cacheURL = shaderCacheURL() {
+            setOpt("gpu-shader-cache-dir", cacheURL.path)
+        }
         switch defaults.string(forKey: SubtitleStyle.Key.mpvHWDec) ?? "auto" {
         case "off": setOpt("hwdec", "no")
         default: setOpt("hwdec", "videotoolbox")
@@ -203,16 +202,19 @@ final class MPVViewController: UIViewController, HarborPlayerController {
         setOpt("stream-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_delay_max=7")
         applyAudioOptions(defaults)
         applyPictureOptions(defaults)
-        if anime4KActive { applyAnime4K(setOpt) }
+        if anime4KActive {
+            applyAnime4KRendererOptions(setOpt)
+            applyAnime4K(setOpt)
+        }
         setOpt("cache", "yes")
         if defaults.bool(forKey: SubtitleStyle.Key.mpvBufferBoost) {
             setOpt("demuxer-readahead-secs", "300")
-            setOpt("demuxer-max-bytes", "512MiB")
-            setOpt("demuxer-max-back-bytes", "64MiB")
+            setOpt("demuxer-max-bytes", "384MiB")
+            setOpt("demuxer-max-back-bytes", "48MiB")
         } else {
-            setOpt("demuxer-readahead-secs", "90")
-            setOpt("demuxer-max-bytes", "192MiB")
-            setOpt("demuxer-max-back-bytes", "32MiB")
+            setOpt("demuxer-readahead-secs", "60")
+            setOpt("demuxer-max-bytes", "128MiB")
+            setOpt("demuxer-max-back-bytes", "16MiB")
         }
         setOpt("keep-open", "yes")
         let initializeResult = mpv_initialize(ctx)
@@ -282,9 +284,10 @@ final class MPVViewController: UIViewController, HarborPlayerController {
             let paused = self.getFlag("pause")
             DispatchQueue.main.async {
                 guard let m = self.model else { return }
-                if pos.isFinite { m.position = pos }
-                if dur.isFinite, dur > 0 { m.duration = dur; m.ready = true }
-                m.paused = paused
+                if pos.isFinite, abs(m.position - pos) > 0.04 { m.position = pos }
+                if dur.isFinite, dur > 0, abs(m.duration - dur) > 0.2 { m.duration = dur }
+                if dur.isFinite, dur > 0, !m.ready { m.ready = true }
+                if m.paused != paused { m.paused = paused }
             }
         }
     }
@@ -330,14 +333,17 @@ final class MPVViewController: UIViewController, HarborPlayerController {
     func setAudioDelay(_ s: Double) { mpvQueue.async { [weak self] in self?.setString("audio-delay", String(format: "%.2f", s)) } }
 
     func setAnime4K(_ enabled: Bool) {
-        anime4KActive = enabled
+        let chain = enabled ? Anime4KShaders.chain() : []
+        let willEnable = enabled && !chain.isEmpty
+        anime4KActive = willEnable
         mpvQueue.async { [weak self] in
             guard let self else { return }
-            if enabled {
-                let chain = Anime4KShaders.chain()
+            if willEnable {
+                self.applyAnime4KRendererOptions { self.setString($0, $1) }
                 self.setString("glsl-shaders", chain.map(\.path).joined(separator: ":"))
             } else {
                 self.setString("glsl-shaders", "")
+                self.restoreRendererOptions { self.setString($0, $1) }
             }
         }
     }
@@ -436,10 +442,74 @@ final class MPVViewController: UIViewController, HarborPlayerController {
         let toneMapping = defaults.string(forKey: SubtitleStyle.Key.toneMapping) ?? "auto"
         if toneMapping != "auto" { setOpt("tone-mapping", toneMapping) }
         setOpt("target-colorspace-hint", "yes")
+        if !anime4KActive { applyMotionOptions(defaults, set: setOpt) }
+    }
+
+    private func applyQualityScaling(_ defaults: UserDefaults,
+                                     set: (String, String) -> Void) {
+        switch defaults.string(forKey: SubtitleStyle.Key.mpvQuality) ?? "balanced" {
+        case "quality":
+            set("scale", "ewa_lanczossharp")
+            set("cscale", "ewa_lanczossoft")
+            set("dscale", "mitchell")
+            set("correct-downscaling", "yes")
+            set("sigmoid-upscaling", "yes")
+        case "performance":
+            set("scale", "bilinear")
+            set("cscale", "bilinear")
+            set("dscale", "bilinear")
+            set("correct-downscaling", "no")
+            set("sigmoid-upscaling", "no")
+        default:
+            set("scale", "spline36")
+            set("cscale", "spline36")
+            set("dscale", "mitchell")
+            set("correct-downscaling", "yes")
+            set("sigmoid-upscaling", "no")
+        }
+    }
+
+    private func applyMotionOptions(_ defaults: UserDefaults,
+                                    set: (String, String) -> Void) {
         if defaults.bool(forKey: SubtitleStyle.Key.motionInterpolation) {
-            setOpt("video-sync", "display-resample")
-            setOpt("interpolation", "yes")
-            setOpt("tscale", "oversample")
+            set("video-sync", "display-resample")
+            set("interpolation", "yes")
+            set("tscale", "oversample")
+        } else {
+            set("video-sync", "audio")
+            set("interpolation", "no")
+        }
+    }
+
+    /// Anime4K already owns luma/chroma upscaling. Bilinear fallback and disabling
+    /// interpolation prevent mpv from doing a second expensive scaling pass per frame.
+    private func applyAnime4KRendererOptions(_ set: (String, String) -> Void) {
+        set("scale", "bilinear")
+        set("cscale", "bilinear")
+        set("dscale", "bilinear")
+        set("correct-downscaling", "no")
+        set("sigmoid-upscaling", "no")
+        set("video-sync", "audio")
+        set("interpolation", "no")
+    }
+
+    private func restoreRendererOptions(_ set: (String, String) -> Void) {
+        let defaults = UserDefaults.standard
+        applyQualityScaling(defaults, set: set)
+        applyMotionOptions(defaults, set: set)
+    }
+
+    private func shaderCacheURL() -> URL? {
+        guard let caches = FileManager.default.urls(for: .cachesDirectory,
+                                                     in: .userDomainMask).first else { return nil }
+        let directory = caches.appendingPathComponent("MPVShaderCache", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: directory,
+                                                    withIntermediateDirectories: true)
+            return directory
+        } catch {
+            log.warning("Could not create mpv shader cache: \(error.localizedDescription, privacy: .public)")
+            return nil
         }
     }
 
@@ -476,24 +546,37 @@ private enum Anime4KShaders {
     static func chain() -> [URL] {
         let defaults = UserDefaults.standard
         let tier = defaults.string(forKey: SubtitleStyle.Key.anime4KTier) ?? "fast"
-        let large = tier == "hq" ? "VL" : "M"
         let mode = defaults.string(forKey: SubtitleStyle.Key.anime4KMode) ?? "A"
         let clamp = "Anime4K_Clamp_Highlights.glsl"
         let down2 = "Anime4K_AutoDownscalePre_x2.glsl"
         let down4 = "Anime4K_AutoDownscalePre_x4.glsl"
-        let upscaleMedium = "Anime4K_Upscale_CNN_x2_M.glsl"
-        let restore = "Anime4K_Restore_CNN_\(large).glsl"
-        let restoreSoft = "Anime4K_Restore_CNN_Soft_\(large).glsl"
-        let upscale = "Anime4K_Upscale_CNN_x2_\(large).glsl"
-        let denoise = "Anime4K_Upscale_Denoise_CNN_x2_\(large).glsl"
         let files: [String]
-        switch mode {
-        case "B": files = [clamp, restoreSoft, upscale, down2, down4, upscaleMedium]
-        case "C": files = [clamp, denoise, down2, down4, upscaleMedium]
-        case "A+A", "AA": files = [clamp, restore, upscale, "Anime4K_Restore_CNN_M.glsl", down2, down4, upscaleMedium]
-        case "B+B", "BB": files = [clamp, restoreSoft, upscale, down2, "Anime4K_Restore_CNN_Soft_M.glsl", down4, upscaleMedium]
-        case "C+A", "CA": files = [clamp, denoise, down2, down4, "Anime4K_Restore_CNN_M.glsl", upscaleMedium]
-        default: files = [clamp, restore, upscale, down2, down4, upscaleMedium]
+        if tier == "fast" {
+            // tvOS-first pipeline: the S networks cut the CNN work drastically and
+            // avoid the second upscale pass responsible for most frame-time spikes.
+            switch mode {
+            case "B": files = [clamp, "Anime4K_Restore_CNN_Soft_S.glsl", "Anime4K_Upscale_CNN_x2_S.glsl"]
+            case "C": files = [clamp, "Anime4K_Upscale_Denoise_CNN_x2_S.glsl"]
+            case "A+A", "AA": files = [clamp, "Anime4K_Restore_CNN_M.glsl", "Anime4K_Upscale_CNN_x2_S.glsl", "Anime4K_Restore_CNN_S.glsl"]
+            case "B+B", "BB": files = [clamp, "Anime4K_Restore_CNN_Soft_M.glsl", "Anime4K_Upscale_CNN_x2_S.glsl", "Anime4K_Restore_CNN_Soft_S.glsl"]
+            case "C+A", "CA": files = [clamp, "Anime4K_Upscale_Denoise_CNN_x2_S.glsl", "Anime4K_Restore_CNN_S.glsl"]
+            default: files = [clamp, "Anime4K_Restore_CNN_S.glsl", "Anime4K_Upscale_CNN_x2_S.glsl"]
+            }
+        } else {
+            let large = tier == "hq" ? "VL" : "M"
+            let finalUpscale = tier == "hq" ? "Anime4K_Upscale_CNN_x2_M.glsl" : "Anime4K_Upscale_CNN_x2_S.glsl"
+            let restore = "Anime4K_Restore_CNN_\(large).glsl"
+            let restoreSoft = "Anime4K_Restore_CNN_Soft_\(large).glsl"
+            let upscale = "Anime4K_Upscale_CNN_x2_\(large).glsl"
+            let denoise = "Anime4K_Upscale_Denoise_CNN_x2_\(large).glsl"
+            switch mode {
+            case "B": files = [clamp, restoreSoft, upscale, down2, down4, finalUpscale]
+            case "C": files = [clamp, denoise, down2, down4, finalUpscale]
+            case "A+A", "AA": files = [clamp, restore, upscale, "Anime4K_Restore_CNN_M.glsl", down2, down4, finalUpscale]
+            case "B+B", "BB": files = [clamp, restoreSoft, upscale, down2, "Anime4K_Restore_CNN_Soft_M.glsl", down4, finalUpscale]
+            case "C+A", "CA": files = [clamp, denoise, down2, down4, "Anime4K_Restore_CNN_M.glsl", finalUpscale]
+            default: files = [clamp, restore, upscale, down2, down4, finalUpscale]
+            }
         }
         let urls = files.compactMap { filename in
             let name = filename.replacingOccurrences(of: ".glsl", with: "")

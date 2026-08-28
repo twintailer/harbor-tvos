@@ -12,7 +12,9 @@ struct HarborTVApp: App {
 
     init() {
         HarborSettings.registerDefaults()
-        URLCache.shared.memoryCapacity = 96 * 1024 * 1024
+        // Keep enough headroom for VideoToolbox + Anime4K. Oversized artwork/network
+        // caches can force tvOS memory pressure and turn focus animations into hitches.
+        URLCache.shared.memoryCapacity = 32 * 1024 * 1024
         URLCache.shared.diskCapacity = 420 * 1024 * 1024
         // Category only — no setActive. The audio output driver activates the session when
         // it starts; a long-form .playback/.moviePlayback category is what tvOS expects

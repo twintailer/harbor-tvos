@@ -67,7 +67,7 @@ jobs:
           test -n "$APP"
           mkdir -p Payload dist
           cp -R "$APP" Payload/
-          zip -r -q "dist/Harbor_tvOS_0.3.3_unsigned.ipa" Payload
+          zip -r -q "dist/Harbor_tvOS_0.3.4_unsigned.ipa" Payload
           ls -la dist
 
       - name: Upload IPA artifact

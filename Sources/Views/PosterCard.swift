@@ -19,7 +19,7 @@ struct PosterCard: View {
         VStack(alignment: .leading, spacing: 12) {
             NavigationLink(value: item) {
                 ZStack(alignment: .bottomLeading) {
-                    HarborArtworkImage(url: item.poster, maxPixelSize: 900,
+                    HarborArtworkImage(url: item.poster, maxPixelSize: 640,
                                        fallbackText: item.name, showProgress: true)
                     .frame(width: cardWidth, height: cardWidth * 3 / 2)
                     .clipShape(RoundedRectangle(cornerRadius: posterRadius, style: .continuous))
@@ -92,7 +92,7 @@ struct ContinueCard: View {
             NavigationLink(value: entry.meta) {
                 ZStack(alignment: .bottomLeading) {
                     HarborArtworkImage(url: entry.meta.background ?? entry.meta.poster,
-                                       maxPixelSize: 1100)
+                                       maxPixelSize: 900)
                     .frame(width: width, height: height)
                     .clipShape(RoundedRectangle(cornerRadius: posterRadius, style: .continuous))
 

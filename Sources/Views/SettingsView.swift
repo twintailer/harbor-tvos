@@ -585,13 +585,13 @@ private struct AnimePanel: View {
         List {
             Section("Anime4K upscaling") {
                 Toggle("Enable Anime4K", isOn: $enabled)
-                    .disabled(shaderCount < 11)
+                    .disabled(shaderCount < 15)
                 Toggle("Apply to anime only", isOn: $animeOnly)
                     .disabled(!enabled)
                 Toggle("Show Anime4K indicator", isOn: $indicator)
                     .disabled(!enabled)
-                LabeledContent("Bundled shaders", value: shaderCount >= 11 ? "11 ready" : "\(shaderCount)/11")
-                if shaderCount < 11 {
+                LabeledContent("Bundled shaders", value: shaderCount >= 15 ? "15 ready" : "\(shaderCount)/15")
+                if shaderCount < 15 {
                     SettingsHint("This build does not contain the Anime4K shader pack. The release workflow bundles it automatically.")
                 }
             }
@@ -602,7 +602,10 @@ private struct AnimePanel: View {
                 Picker("GPU tier", selection: $tier) {
                     ForEach(HarborSettings.animeTiers) { Text($0.label).tag($0.id) }
                 }
-                SettingsHint(tier == "hq" ? "High quality uses the largest CNN shaders and is intended for Apple TV 4K." : "Performance is the safe default and uses the medium shader chain.")
+                if let choice = HarborSettings.animeTiers.first(where: { $0.id == tier }) {
+                    SettingsHint(choice.detail)
+                }
+                SettingsHint("Anime4K uses a dedicated GPU pipeline. Smooth motion and expensive mpv scaling are suspended while it is active so the Apple TV can spend its frame budget on the Anime4K shaders.")
             }
         }
         .navigationTitle("Anime tweaks")
@@ -686,16 +689,46 @@ private struct LanguagesPanel: View {
 
     var body: some View {
         List {
-            Section("Preferred languages") {
-                Picker("Audio language", selection: $audioLang) {
-                    ForEach(SubtitleStyle.languages) { Text($0.label).tag($0.id) }
+            Section("Playback languages") {
+                NavigationLink {
+                    LanguageSelectionPanel(
+                        title: "Audio language",
+                        explanation: "Harbor selects this spoken language when a matching audio track is available.",
+                        selection: $audioLang)
+                } label: {
+                    LanguagePreferenceRow(
+                        icon: "waveform",
+                        title: "Audio language",
+                        detail: "Preferred spoken track",
+                        selected: languageLabel(audioLang))
                 }
-                Picker("Subtitle language", selection: $subLang) {
-                    ForEach(SubtitleStyle.languages) { Text($0.label).tag($0.id) }
+                NavigationLink {
+                    LanguageSelectionPanel(
+                        title: "Primary subtitles",
+                        explanation: "This is the first subtitle language Harbor tries for every stream.",
+                        selection: $subLang)
+                } label: {
+                    LanguagePreferenceRow(
+                        icon: "captions.bubble",
+                        title: "Primary subtitles",
+                        detail: "First subtitle choice",
+                        selected: languageLabel(subLang))
                 }
-                Picker("Secondary subtitle language", selection: $secondarySubLang) {
-                    ForEach(SubtitleStyle.languages) { Text($0.label).tag($0.id) }
+                NavigationLink {
+                    LanguageSelectionPanel(
+                        title: "Fallback subtitles",
+                        explanation: "Harbor tries this language when no primary-language subtitle is available.",
+                        selection: $secondarySubLang)
+                } label: {
+                    LanguagePreferenceRow(
+                        icon: "captions.bubble.fill",
+                        title: "Fallback subtitles",
+                        detail: "Used if the first choice is unavailable",
+                        selected: languageLabel(secondarySubLang))
                 }
+                SettingsHint("Open a row to choose one language. “System / Auto” follows the stream and Apple TV language instead of forcing a specific track.")
+            }
+            Section("Subtitle behavior") {
                 Toggle("Subtitles off by default", isOn: $subsOff)
                 Toggle("Prefer embedded subtitles", isOn: $preferEmbedded)
                 Toggle("Prefer forced / signs tracks", isOn: $preferForced)
@@ -789,6 +822,88 @@ private struct LanguagesPanel: View {
             }
         }
         .navigationTitle("Languages")
+    }
+
+    private func languageLabel(_ id: String) -> String {
+        SubtitleStyle.languages.first(where: { $0.id == id })?.label ?? "System / Auto"
+    }
+}
+
+private struct LanguagePreferenceRow: View {
+    let icon: String
+    let title: String
+    let detail: String
+    let selected: String
+
+    var body: some View {
+        HStack(spacing: 20) {
+            Image(systemName: icon)
+                .font(.system(size: 26, weight: .semibold))
+                .frame(width: 42)
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(title)
+                    .font(.system(size: 27, weight: .semibold))
+                Text(detail)
+                    .font(.system(size: 19))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 30)
+            Text(selected)
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .padding(.vertical, 7)
+    }
+}
+
+private struct LanguageSelectionPanel: View {
+    @Environment(\.dismiss) private var dismiss
+    let title: String
+    let explanation: String
+    @Binding var selection: String
+
+    var body: some View {
+        List {
+            Section {
+                SettingsHint(explanation)
+            }
+            Section("Choose language") {
+                ForEach(SubtitleStyle.languages) { language in
+                    Button {
+                        selection = language.id
+                        dismiss()
+                    } label: {
+                        HStack(spacing: 18) {
+                            Image(systemName: language.id.isEmpty ? "wand.and.stars" : "character.bubble")
+                                .font(.system(size: 23, weight: .semibold))
+                                .frame(width: 36)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(language.label)
+                                    .font(.system(size: 27, weight: .semibold))
+                                if language.id.isEmpty {
+                                    Text("Let Apple TV and the stream decide")
+                                        .font(.system(size: 18))
+                                        .foregroundStyle(.secondary)
+                                } else {
+                                    Text(language.id.uppercased())
+                                        .font(.system(size: 17, weight: .medium, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            Spacer()
+                            if selection == language.id {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 28, weight: .semibold))
+                            }
+                        }
+                        .padding(.vertical, 6)
+                    }
+                }
+            }
+        }
+        .navigationTitle(title)
     }
 }
 

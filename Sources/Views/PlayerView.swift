@@ -125,7 +125,7 @@ struct PlayerView: View {
     private var animeAvailable: Bool {
         let nested = Bundle.main.urls(forResourcesWithExtension: "glsl", subdirectory: "Anime4K") ?? []
         let root = Bundle.main.urls(forResourcesWithExtension: "glsl", subdirectory: nil) ?? []
-        return Set(nested + root).count >= 11
+        return Set(nested + root).count >= 15
     }
     private var shouldStartAnime4K: Bool {
         anime4KEnabled && animeAvailable && (!anime4KAnimeOnly || target.isAnime)
@@ -880,8 +880,7 @@ struct PlayerView: View {
             selectedAudioTrackID = actualAudio
         }
         selectedSubtitleTrackID = freshSubtitles.first(where: \.selected)?.id ?? -1
-        let s = model.controller?.mediaSummary()
-        videoHeight = s?.height ?? 0; audioCodec = s?.audioCodec ?? ""; audioOut = s?.audioOut ?? ""
+        updateMediaSummary(model.controller?.mediaSummary())
     }
     private func refreshTracksSoon() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { refreshTracks() }
@@ -890,12 +889,13 @@ struct PlayerView: View {
 
     private func monitorAudioOutput() {
         let now = Date()
-        guard now.timeIntervalSince(lastMediaRefresh) >= 0.8 else { return }
+        // Probe quickly until audio is established, then only occasionally. Repeated
+        // synchronous mpv metadata reads on the main thread caused visible focus jitter.
+        let interval = audioOut.isEmpty ? 0.8 : 10.0
+        guard now.timeIntervalSince(lastMediaRefresh) >= interval else { return }
         lastMediaRefresh = now
         let summary = model.controller?.mediaSummary()
-        videoHeight = summary?.height ?? videoHeight
-        audioCodec = summary?.audioCodec ?? audioCodec
-        audioOut = summary?.audioOut ?? ""
+        updateMediaSummary(summary)
         if !audioOut.isEmpty {
             audioRecoveryStage = 0
             return
@@ -908,6 +908,13 @@ struct PlayerView: View {
         model.controller?.recoverAudioOutput(forceStereo: audioRecoveryStage == 1)
         audioRecoveryStage += 1
         refreshTracksSoon()
+    }
+
+    private func updateMediaSummary(_ summary: (height: Int, audioCodec: String, audioOut: String)?) {
+        guard let summary else { return }
+        if summary.height > 0, videoHeight != summary.height { videoHeight = summary.height }
+        if !summary.audioCodec.isEmpty, audioCodec != summary.audioCodec { audioCodec = summary.audioCodec }
+        if audioOut != summary.audioOut { audioOut = summary.audioOut }
     }
 
     private func applySubtitleStyleSoon() {

@@ -10,8 +10,8 @@ actor HarborArtworkCache {
     private let images = NSCache<NSString, UIImage>()
 
     init() {
-        images.countLimit = 180
-        images.totalCostLimit = 220 * 1024 * 1024
+        images.countLimit = 120
+        images.totalCostLimit = 128 * 1024 * 1024
     }
 
     func image(for rawURL: String?, maxPixelSize: CGFloat = 1600) async -> UIImage? {

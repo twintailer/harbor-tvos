@@ -34,6 +34,11 @@ struct MPVTrack: Identifiable, Hashable {
     let lang: String
     let selected: Bool
     let external: Bool
+    let forced: Bool
+    let defaultTrack: Bool
+    let hearingImpaired: Bool
+    let codec: String
+    let externalFilename: String
 }
 
 final class MPVViewController: UIViewController, HarborPlayerController {
@@ -320,7 +325,12 @@ final class MPVViewController: UIViewController, HarborPlayerController {
                 title: getString("track-list/\(i)/title") ?? "",
                 lang: getString("track-list/\(i)/lang") ?? "",
                 selected: getFlag("track-list/\(i)/selected"),
-                external: getFlag("track-list/\(i)/external")))
+                external: getFlag("track-list/\(i)/external"),
+                forced: getFlag("track-list/\(i)/forced"),
+                defaultTrack: getFlag("track-list/\(i)/default"),
+                hearingImpaired: getFlag("track-list/\(i)/hearing-impaired"),
+                codec: getString("track-list/\(i)/codec") ?? "",
+                externalFilename: getString("track-list/\(i)/external-filename") ?? ""))
         }
         return result
     }
@@ -572,19 +582,24 @@ private enum Anime4KShaders {
         let down4 = "Anime4K_AutoDownscalePre_x4.glsl"
         let files: [String]
         if tier == "fast" {
-            // tvOS-first pipeline: the S networks cut the CNN work drastically and
-            // avoid the second upscale pass responsible for most frame-time spikes.
+            // Single-pass non-CNN Anime4K. This is dramatically cheaper than even
+            // the S CNN and avoids the continuous frame drops seen on Apple TV.
             switch mode {
-            case "B": files = [clamp, "Anime4K_Restore_CNN_Soft_S.glsl", "Anime4K_Upscale_CNN_x2_S.glsl"]
-            case "C": files = [clamp, "Anime4K_Upscale_Denoise_CNN_x2_S.glsl"]
-            case "A+A", "AA": files = [clamp, "Anime4K_Restore_CNN_M.glsl", "Anime4K_Upscale_CNN_x2_S.glsl", "Anime4K_Restore_CNN_S.glsl"]
-            case "B+B", "BB": files = [clamp, "Anime4K_Restore_CNN_Soft_M.glsl", "Anime4K_Upscale_CNN_x2_S.glsl", "Anime4K_Restore_CNN_Soft_S.glsl"]
-            case "C+A", "CA": files = [clamp, "Anime4K_Upscale_Denoise_CNN_x2_S.glsl", "Anime4K_Restore_CNN_S.glsl"]
-            default: files = [clamp, "Anime4K_Restore_CNN_S.glsl", "Anime4K_Upscale_CNN_x2_S.glsl"]
+            case "B", "B+B", "BB": files = ["Anime4K_Upscale_DTD_x2.glsl"]
+            default: files = ["Anime4K_Upscale_Original_x2.glsl"]
+            }
+        } else if tier == "balanced" {
+            switch mode {
+            case "B": files = ["Anime4K_Restore_CNN_Soft_S.glsl", "Anime4K_Upscale_CNN_x2_S.glsl"]
+            case "C": files = ["Anime4K_Upscale_Denoise_CNN_x2_S.glsl"]
+            case "A+A", "AA": files = [clamp, "Anime4K_Restore_CNN_S.glsl", "Anime4K_Upscale_CNN_x2_S.glsl", "Anime4K_Restore_CNN_S.glsl"]
+            case "B+B", "BB": files = [clamp, "Anime4K_Restore_CNN_Soft_S.glsl", "Anime4K_Upscale_CNN_x2_S.glsl", "Anime4K_Restore_CNN_Soft_S.glsl"]
+            case "C+A", "CA": files = ["Anime4K_Upscale_Denoise_CNN_x2_S.glsl", "Anime4K_Restore_CNN_S.glsl"]
+            default: files = ["Anime4K_Restore_CNN_S.glsl", "Anime4K_Upscale_CNN_x2_S.glsl"]
             }
         } else {
-            let large = tier == "hq" ? "VL" : "M"
-            let finalUpscale = tier == "hq" ? "Anime4K_Upscale_CNN_x2_M.glsl" : "Anime4K_Upscale_CNN_x2_S.glsl"
+            let large = "VL"
+            let finalUpscale = "Anime4K_Upscale_CNN_x2_M.glsl"
             let restore = "Anime4K_Restore_CNN_\(large).glsl"
             let restoreSoft = "Anime4K_Restore_CNN_Soft_\(large).glsl"
             let upscale = "Anime4K_Upscale_CNN_x2_\(large).glsl"

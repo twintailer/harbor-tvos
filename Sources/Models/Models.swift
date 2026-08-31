@@ -85,8 +85,16 @@ struct MetaResponse: Codable {
 }
 
 // A homogeneous focusable row of posters.
+struct CatalogPageSource: Hashable {
+    let base: String
+    let type: String
+    let catalogID: String
+    var genre: String? = nil
+}
+
 struct CatalogRow: Identifiable {
     let id = UUID()
     let title: String
     let items: [MetaItem]
+    var source: CatalogPageSource? = nil
 }

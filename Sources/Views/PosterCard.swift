@@ -7,6 +7,7 @@ import SwiftUI
 struct PosterCard: View {
     let item: MetaItem
     var width: CGFloat = 240
+    var onRemoveFromHistory: (() -> Void)? = nil
     @AppStorage(SubtitleStyle.Key.posterScale) private var posterScale = 1.0
     @AppStorage(SubtitleStyle.Key.posterRadius) private var posterRadius = 12.0
     @AppStorage(SubtitleStyle.Key.reduceArtworkMotion) private var reduceArtworkMotion = false
@@ -35,6 +36,13 @@ struct PosterCard: View {
             .buttonStyle(HarborArtworkButtonStyle(
                 radius: posterRadius, accent: focusColor,
                 reduceMotion: reduceArtworkMotion))
+            .contextMenu {
+                if let onRemoveFromHistory {
+                    Button(role: .destructive, action: onRemoveFromHistory) {
+                        Label("Remove from Watch History", systemImage: "trash")
+                    }
+                }
+            }
             .transaction { transaction in
                 if reduceArtworkMotion { transaction.animation = nil }
             }
@@ -81,6 +89,7 @@ struct ImdbBadge: View {
 struct ContinueCard: View {
     let entry: CwItem
     var width: CGFloat = 400
+    var onRemove: (() -> Void)? = nil
     @AppStorage(SubtitleStyle.Key.accent) private var accent = "green"
     @AppStorage(SubtitleStyle.Key.posterRadius) private var posterRadius = 12.0
     @AppStorage(SubtitleStyle.Key.interfaceStyle) private var interfaceStyle = "harbor"
@@ -138,6 +147,13 @@ struct ContinueCard: View {
             .buttonStyle(HarborArtworkButtonStyle(radius: posterRadius,
                                                    accent: focusColor,
                                                    reduceMotion: false))
+            .contextMenu {
+                if let onRemove {
+                    Button(role: .destructive, action: onRemove) {
+                        Label("Remove from Continue Watching", systemImage: "minus.circle")
+                    }
+                }
+            }
 
             Text(entry.meta.name)
                 .font(.system(size: 20, weight: .medium))

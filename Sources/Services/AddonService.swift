@@ -24,7 +24,10 @@ enum AddonService {
             for request in requests {
                 group.addTask {
                     let items = await catalog(base: request.base, type: request.type, id: request.id)
-                    let row = items.isEmpty ? nil : CatalogRow(title: request.title, items: items)
+                    let source = CatalogPageSource(base: request.base, type: request.type,
+                                                   catalogID: request.id)
+                    let row = items.isEmpty ? nil : CatalogRow(title: request.title, items: items,
+                                                               source: source)
                     return (request.index, row)
                 }
             }
@@ -40,23 +43,36 @@ enum AddonService {
         async let m = catalog(base: CatalogService.cinemeta, type: "movie", id: "top")
         async let s = catalog(base: CatalogService.cinemeta, type: "series", id: "top")
         return [
-            CatalogRow(title: "Trending Movies", items: await m),
-            CatalogRow(title: "Trending Series", items: await s),
+            CatalogRow(title: "Trending Movies", items: await m,
+                       source: CatalogPageSource(base: CatalogService.cinemeta,
+                                                 type: "movie", catalogID: "top")),
+            CatalogRow(title: "Trending Series", items: await s,
+                       source: CatalogPageSource(base: CatalogService.cinemeta,
+                                                 type: "series", catalogID: "top")),
         ].filter { !$0.items.isEmpty }
     }
 
-    static func catalog(base: String, type: String, id: String, genre: String? = nil) async -> [MetaItem] {
+    static func catalog(base: String, type: String, id: String, genre: String? = nil,
+                        skip: Int = 0) async -> [MetaItem] {
         var path = "\(base)/catalog/\(type)/\(id)"
+        var extras: [String] = []
         if let genre, !genre.isEmpty,
            let enc = genre.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) {
-            path += "/genre=\(enc)"
+            extras.append("genre=\(enc)")
         }
+        if skip > 0 { extras.append("skip=\(skip)") }
+        if !extras.isEmpty { path += "/" + extras.joined(separator: "&") }
         path += ".json"
         guard let url = URL(string: path) else { return [] }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
             return (try JSONDecoder().decode(CatalogResponse.self, from: data)).metas ?? []
         } catch { return [] }
+    }
+
+    static func catalog(source: CatalogPageSource, skip: Int) async -> [MetaItem] {
+        await catalog(base: source.base, type: source.type, id: source.catalogID,
+                      genre: source.genre, skip: skip)
     }
 
     // Prefer a user meta-addon that actually serves this id (matching id-prefix), then any other
@@ -320,6 +336,28 @@ extension StremioService {
         change["temp"] = bookmarked ? false : hasProgress
         change["_mtime"] = now
 
+        await putLibraryChange(authKey: authKey, change: change)
+    }
+
+    /// Desktop Harbor's Continue-Watching dismiss keeps the library/history record
+    /// but clears its resume position. That makes the title disappear from the rail
+    /// without also deleting a user's watchlist bookmark.
+    static func clearContinueWatching(authKey: String, id: String) async {
+        guard var change = await rawLibraryItem(authKey: authKey, id: id) else { return }
+        var state = (change["state"] as? [String: Any]) ?? [:]
+        state["timeOffset"] = 0
+        change["state"] = state
+        change["_mtime"] = ISO8601DateFormatter().string(from: Date())
+        await putLibraryChange(authKey: authKey, change: change)
+    }
+
+    /// History's destructive context action mirrors Harbor desktop: remove the
+    /// Stremio library record from visible history rather than only hiding it locally.
+    static func removeFromHistory(authKey: String, id: String) async {
+        guard var change = await rawLibraryItem(authKey: authKey, id: id) else { return }
+        change["removed"] = true
+        change["temp"] = false
+        change["_mtime"] = ISO8601DateFormatter().string(from: Date())
         await putLibraryChange(authKey: authKey, change: change)
     }
 

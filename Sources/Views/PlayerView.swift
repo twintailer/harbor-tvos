@@ -13,6 +13,7 @@ struct PlayerTarget: Identifiable {
     var requestHeaders: [String: String] = [:]
     var onProgress: ((Double, Double) -> Void)? = nil
     var onEnded: (() -> Void)? = nil
+    var onChangeSource: ((Double) -> Void)? = nil
 }
 
 /// Full-screen libmpv player for tvOS. ALL remote input is handled at the UIKit level by a focusable
@@ -116,7 +117,7 @@ struct PlayerView: View {
     @AppStorage(SubtitleStyle.Key.showAspectButton) private var showAspectButton = true
     @AppStorage(SubtitleStyle.Key.showAnimeButton) private var showAnimeButton = true
 
-    private enum Control: Hashable { case skip, upNext, restart, back, play, fwd, next, audio, subs, aspect, speed, anime, scrub }
+    private enum Control: Hashable { case skip, upNext, restart, back, play, fwd, next, source, audio, subs, aspect, speed, anime, scrub }
     private enum PanelKind { case audio, subtitles, subtitleSettings, aspect, speed, anime, debug }
     @State private var selected: Control = .play
     @State private var lastButton: Control = .play
@@ -129,7 +130,7 @@ struct PlayerView: View {
     private var animeAvailable: Bool {
         let nested = Bundle.main.urls(forResourcesWithExtension: "glsl", subdirectory: "Anime4K") ?? []
         let root = Bundle.main.urls(forResourcesWithExtension: "glsl", subdirectory: nil) ?? []
-        return Set(nested + root).count >= 15
+        return Set(nested + root).count >= 17
     }
     private var shouldStartAnime4K: Bool {
         anime4KEnabled && animeAvailable && (!anime4KAnimeOnly || target.isAnime)
@@ -293,6 +294,7 @@ struct PlayerView: View {
         c.append(.play)
         if showSeekButtons { c.append(.fwd) }
         if showNextButton, target.onEnded != nil { c.append(.next) }
+        if target.onChangeSource != nil { c.append(.source) }
         if showSpeedButton { c.append(.speed) }
         if showSubtitleButton { c.append(.subs) }
         if showAudioButton, !audioTracks.isEmpty { c.append(.audio) }
@@ -353,6 +355,7 @@ struct PlayerView: View {
         case .fwd:     seek(Double(seekForwardStep))
         case .play:    toggle()
         case .next:    playNextNow()
+        case .source:  changeSource()
         case .audio:   openPanel(.audio)
         case .subs:    openPanel(.subtitles)
         case .aspect:  openPanel(.aspect)
@@ -410,6 +413,7 @@ struct PlayerView: View {
                     }
                     Spacer()
                     HStack(spacing: 14) {
+                        if target.onChangeSource != nil { ctrlButton(.source, "rectangle.2.swap") }
                         if showSpeedButton { ctrlButton(.speed, "speedometer") }
                         if showSubtitleButton { ctrlButton(.subs, "captions.bubble.fill") }
                         if showAudioButton, !audioTracks.isEmpty { ctrlButton(.audio, "waveform.circle.fill") }
@@ -569,7 +573,8 @@ struct PlayerView: View {
                 selectedSubtitleTrackID = -1
                 model.controller?.setSubtitleTrack(-1); refreshTracksSoon()
             }]
-            rows += groupedTrackRows(subtitleTracks, selectedID: selectedSubtitleTrackID) { setSub($0) }
+            rows += groupedTrackRows(subtitleTracks, selectedID: selectedSubtitleTrackID,
+                                     showSubtitleDetails: true) { setSub($0) }
             rows.append(OptionRow(label: "Subtitle Settings", detail: "›") { openPanel(.subtitleSettings) })
             rows.append(OptionRow(label: "Subtitle sync", detail: String(format: "%+.1fs", subtitleDelay), isHeader: true))
             rows.append(OptionRow(label: "Subtitles 0.1s earlier") { subtitleDelay -= 0.1; model.controller?.setSubDelay(subtitleDelay) })
@@ -716,7 +721,9 @@ struct PlayerView: View {
         }
     }
 
-    private func groupedTrackRows(_ tracks: [MPVTrack], selectedID: Int?, select: @escaping (Int) -> Void) -> [OptionRow] {
+    private func groupedTrackRows(_ tracks: [MPVTrack], selectedID: Int?,
+                                  showSubtitleDetails: Bool = false,
+                                  select: @escaping (Int) -> Void) -> [OptionRow] {
         let groups = Dictionary(grouping: tracks) {
             SubtitleStyle.languageID(code: $0.lang, title: $0.title)
                 ?? ($0.lang.isEmpty ? "und" : $0.lang.lowercased())
@@ -728,16 +735,37 @@ struct PlayerView: View {
                 let t = ts[0]
                 let base = t.title.isEmpty ? "Track \(t.id)" : t.title
                 rows.append(OptionRow(label: "\(base)  ·  [\(langName(code))]",
+                                      detail: showSubtitleDetails ? subtitleTrackDetail(t) : "",
                                       isSelected: selectedID == t.id) { select(t.id) })
             } else {
                 rows.append(OptionRow(label: langName(code), isHeader: true))
                 for (i, t) in ts.enumerated() {
                     let base = t.title.isEmpty ? "Track \(i + 1)" : t.title
-                    rows.append(OptionRow(label: base, isSelected: selectedID == t.id) { select(t.id) })
+                    rows.append(OptionRow(label: base,
+                                          detail: showSubtitleDetails ? subtitleTrackDetail(t) : "",
+                                          isSelected: selectedID == t.id) { select(t.id) })
                 }
             }
         }
         return rows
+    }
+
+    private func subtitleTrackDetail(_ track: MPVTrack) -> String {
+        var badges: [String] = []
+        let title = track.title.lowercased()
+        if track.forced || title.contains("forced") || title.contains("signs") {
+            badges.append("Forced")
+        }
+        if track.hearingImpaired || title.contains("sdh") || title.contains("hearing impaired") {
+            badges.append("SDH")
+        }
+        badges.append(track.external || !track.externalFilename.isEmpty
+                      ? "Add-on / external" : "Embedded")
+        if track.defaultTrack { badges.append("Default") }
+        if !track.codec.isEmpty, track.codec.caseInsensitiveCompare("VLC") != .orderedSame {
+            badges.append(track.codec.uppercased())
+        }
+        return badges.joined(separator: "  ·  ")
     }
 
     private func langName(_ code: String) -> String {
@@ -793,7 +821,7 @@ struct PlayerView: View {
                                             }
                                             Text(row.label).lineLimit(wide ? 2 : 1)
                                             Spacer(minLength: 12)
-                                            if !row.isSelected, !row.detail.isEmpty {
+                                            if !row.detail.isEmpty {
                                                 Text(row.detail).lineLimit(1)
                                                     .foregroundStyle(focused ? .black.opacity(0.64) : .white.opacity(0.58))
                                             }
@@ -1032,6 +1060,14 @@ struct PlayerView: View {
         target.onProgress?(model.position, model.duration)
         dismiss()
         next()
+    }
+
+    private func changeSource() {
+        guard let onChangeSource = target.onChangeSource else { return }
+        let position = scrubbing ? scrubTarget : model.position
+        commitScrubIfNeeded()
+        onChangeSource(position)
+        dismiss()
     }
 
     // MARK: - Intro / recap / credits skipping

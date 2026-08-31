@@ -585,13 +585,13 @@ private struct AnimePanel: View {
         List {
             Section("Anime4K upscaling") {
                 Toggle("Enable Anime4K", isOn: $enabled)
-                    .disabled(shaderCount < 15)
+                    .disabled(shaderCount < 17)
                 Toggle("Apply to anime only", isOn: $animeOnly)
                     .disabled(!enabled)
                 Toggle("Show Anime4K indicator", isOn: $indicator)
                     .disabled(!enabled)
-                LabeledContent("Bundled shaders", value: shaderCount >= 15 ? "15 ready" : "\(shaderCount)/15")
-                if shaderCount < 15 {
+                LabeledContent("Bundled shaders", value: shaderCount >= 17 ? "17 ready" : "\(shaderCount)/17")
+                if shaderCount < 17 {
                     SettingsHint("This build does not contain the Anime4K shader pack. The release workflow bundles it automatically.")
                 }
             }
@@ -604,6 +604,9 @@ private struct AnimePanel: View {
                 }
                 if let choice = HarborSettings.animeTiers.first(where: { $0.id == tier }) {
                     SettingsHint(choice.detail)
+                }
+                if tier == "fast" {
+                    SettingsHint("Maximum performance uses one Anime4K pass. Mode B selects the edge-aware DTD scaler; the other modes use the lightest Original scaler.")
                 }
                 SettingsHint("Anime4K uses a dedicated GPU pipeline. Smooth motion and expensive mpv scaling are suspended while it is active so the Apple TV can spend its frame budget on the Anime4K shaders.")
             }

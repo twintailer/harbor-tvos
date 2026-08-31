@@ -407,8 +407,8 @@ enum HarborSettings {
         Choice(id: "C+A", label: "Mode C+A", detail: "Strong upscale and restore"),
     ]
     static let animeTiers = [
-        Choice(id: "fast", label: "Apple TV performance", detail: "A reduced S-shader pipeline for the smoothest playback. Recommended."),
-        Choice(id: "balanced", label: "Balanced", detail: "The fuller M/S low-end pipeline. Sharper, but needs substantially more GPU time."),
+        Choice(id: "fast", label: "Maximum performance", detail: "A single-pass Original/DTD Anime4K pipeline. Recommended for fluid Apple TV playback."),
+        Choice(id: "balanced", label: "Balanced", detail: "A compact S-CNN pipeline with restore and upscale. Sharper, but noticeably heavier."),
         Choice(id: "hq", label: "Maximum quality", detail: "The full VL/M pipeline. Intended only for the fastest Apple TV 4K models."),
     ]
     static let streamFilters = [

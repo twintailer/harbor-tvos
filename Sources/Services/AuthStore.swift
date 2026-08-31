@@ -36,6 +36,23 @@ final class AuthStore: ObservableObject {
         libraryItems = await StremioService.library(authKey: authKey)
     }
 
+    func clearContinueWatching(_ id: String) async {
+        continueWatching.removeAll { $0.id == id }
+        guard let authKey else { return }
+        await StremioService.clearContinueWatching(authKey: authKey, id: id)
+        await loadContinueWatching()
+        await loadLibrary()
+    }
+
+    func removeFromHistory(_ id: String) async {
+        libraryItems.removeAll { $0._id == id }
+        continueWatching.removeAll { $0.id == id }
+        guard let authKey else { return }
+        await StremioService.removeFromHistory(authKey: authKey, id: id)
+        await loadLibrary()
+        await loadContinueWatching()
+    }
+
     func refreshAccountData() async {
         await loadAddons()
         await loadLibrary()

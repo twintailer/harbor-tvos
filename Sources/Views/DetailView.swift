@@ -14,6 +14,8 @@ struct DetailView: View {
     @State private var pendingVideo: MetaItem.Video?
     @State private var changingBookmark = false
     @State private var streamError: String?
+    @State private var availableStreams: [StreamOption] = []
+    @State private var sourceChangeStart: Double?
     @AppStorage(SubtitleStyle.Key.instantPlay) private var instantPlay = true
     @AppStorage(SubtitleStyle.Key.rememberStream) private var rememberStream = true
     @AppStorage(SubtitleStyle.Key.resume) private var resumePlayback = true
@@ -27,12 +29,14 @@ struct DetailView: View {
         pendingStreamId = streamId
         pendingTitle = title
         pendingVideo = video
+        sourceChangeStart = nil
         resolving = true
         Task {
             let streams = await StreamResolver.streams(
                 addons: auth.addons, type: meta.type, id: streamId)
             await MainActor.run {
                 resolving = false
+                availableStreams = streams
                 let remembered = rememberStream
                     ? UserDefaults.standard.string(forKey: lastStreamKey(streamId))
                         .flatMap { id in streams.first { $0.id == id && $0.isResolvable } }
@@ -126,10 +130,12 @@ struct DetailView: View {
         .sheet(isPresented: Binding(get: { pickerStreams != nil }, set: { if !$0 { pickerStreams = nil } })) {
             StreamsView(title: meta.name, streams: pickerStreams ?? []) { s in
                 pickerStreams = nil
+                let startOverride = sourceChangeStart
+                sourceChangeStart = nil
                 if rememberStream { UserDefaults.standard.set(s.id, forKey: lastStreamKey(pendingStreamId)) }
                 open(stream: s, streamId: pendingStreamId,
                      title: pendingTitle.isEmpty ? meta.name : pendingTitle,
-                     video: pendingVideo)
+                     video: pendingVideo, startOverride: startOverride)
             }
         }
         .alert("Stream unavailable", isPresented: Binding(
@@ -233,10 +239,10 @@ struct DetailView: View {
     }
 
     private func open(stream: StreamOption, streamId: String, title: String,
-                      video: MetaItem.Video?) {
+                      video: MetaItem.Video?, startOverride: Double? = nil) {
         if let raw = stream.url, let url = URL(string: raw) {
             player = makeTarget(stream: stream, resolvedURL: url, streamId: streamId,
-                                title: title, video: video)
+                                title: title, video: video, startOverride: startOverride)
             return
         }
         guard let hash = stream.infoHash, TorrServerService.isConfigured else {
@@ -252,7 +258,7 @@ struct DetailView: View {
                 switch result {
                 case .success(let url):
                     player = makeTarget(stream: stream, resolvedURL: url, streamId: streamId,
-                                        title: title, video: video)
+                                        title: title, video: video, startOverride: startOverride)
                 case .notConfigured:
                     streamError = "TorrServer is not configured."
                 case .failed(let message):
@@ -263,12 +269,15 @@ struct DetailView: View {
     }
 
     private func makeTarget(stream: StreamOption, resolvedURL url: URL, streamId: String,
-                            title: String, video: MetaItem.Video?) -> PlayerTarget {
+                            title: String, video: MetaItem.Video?,
+                            startOverride: Double? = nil) -> PlayerTarget {
         if rememberStream { UserDefaults.standard.set(stream.id, forKey: lastStreamKey(streamId)) }
         let state = libItem?.state
         let sameVideo = meta.type == "movie" || state?.video_id == streamId ||
             (state?.season == video?.season && state?.episode == video?.episode)
-        let start = resumePlayback && sameVideo ? (state?.timeOffset ?? 0) / 1000 : 0
+        let savedStart = resumePlayback && sameVideo ? (state?.timeOffset ?? 0) / 1000 : 0
+        let start = max(0, startOverride ?? savedStart)
+        let sourceChoices = availableStreams
         let next = video.flatMap { nextEpisode(after: $0) }
         let playNext: (() -> Void)?
         if let next {
@@ -307,7 +316,19 @@ struct DetailView: View {
                     await auth.loadContinueWatching()
                 }
             },
-            onEnded: playNext)
+            onEnded: playNext,
+            onChangeSource: sourceChoices.count > 1 ? { position in
+                pendingStreamId = streamId
+                pendingTitle = title
+                pendingVideo = video
+                sourceChangeStart = position
+                Task { @MainActor in
+                    // Let fullScreenCover finish dismissing before presenting the
+                    // source sheet; otherwise tvOS drops the second presentation.
+                    try? await Task.sleep(nanoseconds: 450_000_000)
+                    pickerStreams = sourceChoices
+                }
+            } : nil)
     }
 
     private func nextEpisode(after video: MetaItem.Video) -> MetaItem.Video? {

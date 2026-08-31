@@ -5,6 +5,10 @@ struct DiscoverView: View {
     @State private var type = "movie"
     @State private var items: [MetaItem] = []
     @State private var loading = true
+    @State private var loadingMore = false
+    @State private var hasMore = false
+    @State private var nextSkip = 0
+    @State private var pageSource: CatalogPageSource?
 
     private let genres = ["", "Action", "Comedy", "Drama", "Thriller", "Sci-Fi", "Horror", "Animation"]
     @State private var genre = ""
@@ -47,6 +51,12 @@ struct DiscoverView: View {
                         }
                     }
                     .padding(.horizontal, 60)
+
+                    if hasMore {
+                        HStack { Spacer(); ProgressView().controlSize(.large); Spacer() }
+                            .frame(height: 100)
+                            .task { await loadMore() }
+                    }
                 }
                 .padding(.bottom, 60)
             }
@@ -64,23 +74,47 @@ struct DiscoverView: View {
 
     private func load() async {
         loading = true
+        loadingMore = false
+        hasMore = false
+        nextSkip = 0
+        items = []
         // Use a catalog addon that serves this type, else Cinemeta.
         let choice: (Addon, Addon.CatalogDef)? = auth.addons.lazy.compactMap { addon in
             guard let catalog = addon.manifest?.catalogs?.first(where: { $0.type == type }) else { return nil }
             return (addon, catalog)
         }.first
-        let result: [MetaItem]
+        var source: CatalogPageSource
+        var result: [MetaItem]
         if let (addon, catalog) = choice {
-            let addonItems = await AddonService.catalog(
-                base: addon.base, type: type, id: catalog.id, genre: genre)
-            if addonItems.isEmpty {
-                result = await CatalogService.catalog(type: type, id: "top", genre: genre)
-            } else {
-                result = addonItems
+            source = CatalogPageSource(base: addon.base, type: type,
+                                       catalogID: catalog.id, genre: genre)
+            result = await AddonService.catalog(source: source, skip: 0)
+            if result.isEmpty {
+                source = CatalogPageSource(base: CatalogService.cinemeta, type: type,
+                                           catalogID: "top", genre: genre)
+                result = await AddonService.catalog(source: source, skip: 0)
             }
         } else {
-            result = await CatalogService.catalog(type: type, id: "top", genre: genre)
+            source = CatalogPageSource(base: CatalogService.cinemeta, type: type,
+                                       catalogID: "top", genre: genre)
+            result = await AddonService.catalog(source: source, skip: 0)
         }
-        await MainActor.run { items = result; loading = false }
+        pageSource = source
+        items = result
+        nextSkip = result.count
+        hasMore = !result.isEmpty
+        loading = false
+    }
+
+    private func loadMore() async {
+        guard !loadingMore, hasMore, let pageSource else { return }
+        loadingMore = true
+        let page = await AddonService.catalog(source: pageSource, skip: nextSkip)
+        let existing = Set(items.map { "\($0.type):\($0.id)" })
+        let fresh = page.filter { !existing.contains("\($0.type):\($0.id)") }
+        nextSkip += page.count
+        if page.isEmpty || fresh.isEmpty { hasMore = false }
+        else { items.append(contentsOf: fresh) }
+        loadingMore = false
     }
 }

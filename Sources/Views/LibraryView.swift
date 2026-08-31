@@ -84,7 +84,12 @@ struct LibraryView: View {
                     } else {
                         LazyVGrid(columns: columns, spacing: 40) {
                             ForEach(items, id: \._id) { item in
-                                PosterCard(item: item.asMeta, width: 200)
+                                PosterCard(
+                                    item: item.asMeta,
+                                    width: 200,
+                                    onRemoveFromHistory: scope == "history" ? {
+                                        Task { await auth.removeFromHistory(item._id) }
+                                    } : nil)
                             }
                         }
                     }

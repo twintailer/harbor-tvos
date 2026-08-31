@@ -19,7 +19,9 @@ struct HomeView: View {
                     }
 
                     if !auth.continueWatching.isEmpty {
-                        ContinueRowView(entries: auth.continueWatching)
+                        ContinueRowView(entries: auth.continueWatching) { entry in
+                            Task { await auth.clearContinueWatching(entry.id) }
+                        }
                     }
 
                     if loading { ProgressView().padding(.horizontal, 60) }
@@ -180,6 +182,7 @@ private struct HarborHeroButtonBody: View {
 
 struct ContinueRowView: View {
     let entries: [CwItem]
+    let onRemove: (CwItem) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -189,7 +192,7 @@ struct ContinueRowView: View {
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: 32) {
                     ForEach(entries) { entry in
-                        ContinueCard(entry: entry)
+                        ContinueCard(entry: entry, onRemove: { onRemove(entry) })
                     }
                 }
                 .padding(.horizontal, 60)
@@ -203,16 +206,27 @@ struct ContinueRowView: View {
 struct CatalogRowView: View {
     let row: CatalogRow
     @EnvironmentObject private var auth: AuthStore
+    @State private var loadedItems: [MetaItem]
+    @State private var nextSkip: Int
+    @State private var loadingMore = false
+    @State private var hasMore: Bool
     @AppStorage(SubtitleStyle.Key.rowTitleScale) private var titleScale = 1.0
     @AppStorage(SubtitleStyle.Key.hideWatched) private var hideWatched = false
     @AppStorage(SubtitleStyle.Key.hideUnreleased) private var hideUnreleased = false
+
+    init(row: CatalogRow) {
+        self.row = row
+        _loadedItems = State(initialValue: row.items)
+        _nextSkip = State(initialValue: row.items.count)
+        _hasMore = State(initialValue: row.source != nil && !row.items.isEmpty)
+    }
 
     private var visibleItems: [MetaItem] {
         let watched = Set(auth.libraryItems.filter {
             ($0.state?.flaggedWatched ?? 0) > 0 || $0.progressRatio >= 0.9
         }.map(\._id))
         let currentYear = Calendar.current.component(.year, from: Date())
-        return row.items.filter { item in
+        return loadedItems.filter { item in
             if hideWatched && watched.contains(item.id) { return false }
             if hideUnreleased,
                let text = item.releaseInfo,
@@ -231,11 +245,32 @@ struct CatalogRowView: View {
                     ForEach(visibleItems) { item in
                         PosterCard(item: item)
                     }
+                    if hasMore, row.source != nil {
+                        ProgressView()
+                            .controlSize(.large)
+                            .frame(width: 120, height: 360)
+                            .task { await loadMore() }
+                    }
                 }
                 .padding(.horizontal, 60)
                 .padding(.vertical, 12)
             }
         }
         .focusSection()
+    }
+
+    private func loadMore() async {
+        guard !loadingMore, hasMore, let source = row.source else { return }
+        loadingMore = true
+        let page = await AddonService.catalog(source: source, skip: nextSkip)
+        let existing = Set(loadedItems.map { "\($0.type):\($0.id)" })
+        let fresh = page.filter { !existing.contains("\($0.type):\($0.id)") }
+        nextSkip += page.count
+        if page.isEmpty || fresh.isEmpty {
+            hasMore = false
+        } else {
+            loadedItems.append(contentsOf: fresh)
+        }
+        loadingMore = false
     }
 }

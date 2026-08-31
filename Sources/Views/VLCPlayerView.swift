@@ -118,7 +118,13 @@ final class VLCViewController: UIViewController, HarborPlayerController {
         return source.map { track in
             MPVTrack(id: Int(track.id), type: type, title: track.name,
                      lang: languageCode(from: track.name), selected: track.id == selected,
-                     external: false)
+                     external: false,
+                     forced: track.name.localizedCaseInsensitiveContains("forced")
+                        || track.name.localizedCaseInsensitiveContains("signs"),
+                     defaultTrack: track.id == selected,
+                     hearingImpaired: track.name.localizedCaseInsensitiveContains("sdh")
+                        || track.name.localizedCaseInsensitiveContains("hearing impaired"),
+                     codec: "VLC", externalFilename: "")
         }
     }
 

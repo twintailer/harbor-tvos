@@ -5,12 +5,16 @@ import Foundation
 enum CatalogService {
     static let cinemeta = "https://v3-cinemeta.strem.io"
 
-    static func catalog(type: String, id: String, genre: String? = nil) async -> [MetaItem] {
+    static func catalog(type: String, id: String, genre: String? = nil,
+                        skip: Int = 0) async -> [MetaItem] {
         var path = "\(cinemeta)/catalog/\(type)/\(id)"
+        var extras: [String] = []
         if let genre, !genre.isEmpty,
            let enc = genre.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) {
-            path += "/genre=\(enc)"
+            extras.append("genre=\(enc)")
         }
+        if skip > 0 { extras.append("skip=\(skip)") }
+        if !extras.isEmpty { path += "/" + extras.joined(separator: "&") }
         path += ".json"
         guard let url = URL(string: path) else { return [] }
         do {

@@ -47,6 +47,10 @@ struct MediaBrowseView: View {
     @EnvironmentObject private var auth: AuthStore
     @State private var items: [MetaItem] = []
     @State private var loading = true
+    @State private var loadingMore = false
+    @State private var hasMore = false
+    @State private var nextSkip = 0
+    @State private var pageSource: CatalogPageSource?
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 40), count: 6)
 
@@ -64,6 +68,15 @@ struct MediaBrowseView: View {
                         LazyVGrid(columns: columns, spacing: 40) {
                             ForEach(items) { PosterCard(item: $0, width: 200) }
                         }
+                        if hasMore {
+                            HStack {
+                                Spacer()
+                                ProgressView().controlSize(.large)
+                                Spacer()
+                            }
+                            .frame(height: 100)
+                            .task { await loadMore() }
+                        }
                     }
                 }
                 .padding(.horizontal, 60).padding(.vertical, 36)
@@ -76,17 +89,29 @@ struct MediaBrowseView: View {
 
     private func load() async {
         loading = true
+        loadingMore = false
+        hasMore = false
+        nextSkip = 0
+        items = []
         let candidates = auth.addons.flatMap { addon in
             (addon.manifest?.catalogs ?? []).filter { $0.type == type }.map { (addon, $0) }
         }
+        var source: CatalogPageSource
         if let first = candidates.first {
-            let addonItems = await AddonService.catalog(
-                base: first.0.base, type: first.1.type, id: first.1.id)
-            items = addonItems.isEmpty ? [] : addonItems
-            if items.isEmpty { items = await fallbackItems() }
+            source = CatalogPageSource(base: first.0.base, type: first.1.type,
+                                       catalogID: first.1.id)
+            items = await AddonService.catalog(source: source, skip: 0)
+            if items.isEmpty {
+                source = fallbackSource
+                items = await AddonService.catalog(source: source, skip: 0)
+            }
         } else {
-            items = await fallbackItems()
+            source = fallbackSource
+            items = await AddonService.catalog(source: source, skip: 0)
         }
+        pageSource = source
+        nextSkip = items.count
+        hasMore = !items.isEmpty
         loading = false
     }
 
@@ -94,11 +119,23 @@ struct MediaBrowseView: View {
         auth.addons.map(\.transportUrl).joined(separator: "|")
     }
 
-    private func fallbackItems() async -> [MetaItem] {
+    private var fallbackSource: CatalogPageSource {
         if type == "anime" {
-            return await CatalogService.catalog(
-                type: "series", id: "top", genre: fallbackGenre ?? "Animation")
+            return CatalogPageSource(base: CatalogService.cinemeta, type: "series",
+                                     catalogID: "top", genre: fallbackGenre ?? "Animation")
         }
-        return await CatalogService.catalog(type: type, id: "top")
+        return CatalogPageSource(base: CatalogService.cinemeta, type: type, catalogID: "top")
+    }
+
+    private func loadMore() async {
+        guard !loadingMore, hasMore, let pageSource else { return }
+        loadingMore = true
+        let page = await AddonService.catalog(source: pageSource, skip: nextSkip)
+        let existing = Set(items.map { "\($0.type):\($0.id)" })
+        let fresh = page.filter { !existing.contains("\($0.type):\($0.id)") }
+        nextSkip += page.count
+        if page.isEmpty || fresh.isEmpty { hasMore = false }
+        else { items.append(contentsOf: fresh) }
+        loadingMore = false
     }
 }

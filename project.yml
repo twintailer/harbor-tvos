@@ -18,6 +18,11 @@ packages:
   VLCKit:
     url: https://github.com/tylerjonesio/vlckit-spm
     from: 3.6.0
+  # Third selectable playback engine. Pin the tested revision so FFmpeg/Metal
+  # behavior cannot change underneath a release build.
+  KSPlayer:
+    url: https://github.com/kingslay/KSPlayer
+    revision: af2e26f68b5bf726463850fe19c23c08a0d56577
 targets:
   HarborTV:
     type: application
@@ -35,12 +40,14 @@ targets:
         product: MPVKit-GPL
       - package: VLCKit
         product: VLCKitSPM
+      - package: KSPlayer
+        product: KSPlayer
     info:
       path: Info.plist
       properties:
         CFBundleDisplayName: Harbor
-        CFBundleShortVersionString: "0.3.6"
-        CFBundleVersion: "11"
+        CFBundleShortVersionString: "0.3.7"
+        CFBundleVersion: "12"
         UIRequiredDeviceCapabilities: [arm64]
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true

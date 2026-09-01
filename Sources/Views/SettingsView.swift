@@ -433,15 +433,15 @@ private struct PlayerPanel: View {
         List {
             Section("Player engine") {
                 Picker("Preferred engine", selection: $playerEngine) {
-                    Text("Auto · MPV recommended").tag("auto")
+                    Text("Auto · VLC, MPV when required").tag("auto")
                     Text("MPV · best features").tag("mpv")
-                    Text("VLC · compatibility fallback").tag("vlc")
+                    Text("VLC · fast default").tag("vlc")
+                    Text("KSPlayer · FFmpeg + Metal").tag("ksplayer")
                 }
                 LabeledContent("Active on next video", value: engineLabel)
                 LabeledContent("Hardware video decode", value: hwdec == "off" ? "Software" : "VideoToolbox")
-                SettingsHint(playerEngine == "vlc"
-                    ? "VLC is useful for streams that stutter or fail in MPV. VLC manages its own subtitle rendering; Anime4K and Harbor's advanced subtitle styling remain MPV-only."
-                    : "MPV provides Harbor's complete feature set: Anime4K, detailed subtitle styling, chapters and the tvOS 26 HDMI audio path. Auto currently prefers MPV.")
+                SettingsHint(engineHint)
+                SettingsHint("You can switch MPV, VLC and KSPlayer from the controls while a video is already playing. Harbor preserves the current position.")
             }
             Section("Aspect ratio") {
                 Picker("Video size", selection: $videoSize) {
@@ -506,7 +506,21 @@ private struct PlayerPanel: View {
         switch playerEngine {
         case "vlc": return "VLC · TVVLCKit"
         case "mpv": return "MPV · MPVKit"
-        default: return "Auto · MPV"
+        case "ksplayer": return "KSPlayer · FFmpeg/Metal"
+        default: return "Auto · VLC"
+        }
+    }
+
+    private var engineHint: String {
+        switch playerEngine {
+        case "mpv":
+            return "MPV provides Anime4K, deterministic ASS styling, chapters and Harbor's full tuning controls."
+        case "ksplayer":
+            return "KSPlayer uses VideoToolbox with an FFmpeg/Metal fallback for formats that need a different decoder path."
+        case "vlc":
+            return "VLC is the lean default for normal playback. Anime4K and ‘Use my style’ automatically switch the current video to MPV."
+        default:
+            return "Auto uses VLC for movies and regular series. Anime4K on anime, or ‘Use my style’, automatically selects MPV."
         }
     }
 }
@@ -570,7 +584,6 @@ private struct VideoTuningPanel: View {
 
 private struct AnimePanel: View {
     @AppStorage(SubtitleStyle.Key.anime4KEnabled) private var enabled = false
-    @AppStorage(SubtitleStyle.Key.anime4KAnimeOnly) private var animeOnly = true
     @AppStorage(SubtitleStyle.Key.anime4KIndicator) private var indicator = true
     @AppStorage(SubtitleStyle.Key.anime4KMode) private var mode = "A"
     @AppStorage(SubtitleStyle.Key.anime4KTier) private var tier = "fast"
@@ -586,8 +599,7 @@ private struct AnimePanel: View {
             Section("Anime4K upscaling") {
                 Toggle("Enable Anime4K", isOn: $enabled)
                     .disabled(shaderCount < 17)
-                Toggle("Apply to anime only", isOn: $animeOnly)
-                    .disabled(!enabled)
+                LabeledContent("Automatic activation", value: "Anime only")
                 Toggle("Show Anime4K indicator", isOn: $indicator)
                     .disabled(!enabled)
                 LabeledContent("Bundled shaders", value: shaderCount >= 17 ? "17 ready" : "\(shaderCount)/17")
@@ -606,9 +618,9 @@ private struct AnimePanel: View {
                     SettingsHint(choice.detail)
                 }
                 if tier == "fast" {
-                    SettingsHint("Maximum performance uses one Anime4K pass. Mode B selects the edge-aware DTD scaler; the other modes use the lightest Original scaler.")
+                    SettingsHint("Maximum performance uses the guarded DTD scaler. It avoids CNN passes and skips expensive work when meaningful upscaling is not required.")
                 }
-                SettingsHint("Anime4K uses a dedicated GPU pipeline. Smooth motion and expensive mpv scaling are suspended while it is active so the Apple TV can spend its frame budget on the Anime4K shaders.")
+                SettingsHint("Anime4K is never attached to movies or regular series. Anime playback automatically switches to MPV, and native 4K anime skips the shader graph to avoid GPU-memory crashes.")
             }
         }
         .navigationTitle("Anime tweaks")
@@ -747,6 +759,9 @@ private struct LanguagesPanel: View {
                 }
                 Picker("Styled (ASS) subtitles", selection: $assOverride) {
                     ForEach(SubtitleStyle.assOverrides) { Text($0.label).tag($0.id) }
+                }
+                if assOverride == "force" {
+                    SettingsHint("Use my style strips ASS/SSA script styling and forces Harbor's font, size, colors, outline and position. Playback automatically uses MPV so the override cannot be bypassed.")
                 }
                 if subStyle == "box" {
                     Picker("Background opacity", selection: $boxOpacity) {

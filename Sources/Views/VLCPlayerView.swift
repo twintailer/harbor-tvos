@@ -182,7 +182,7 @@ final class VLCViewController: UIViewController, HarborPlayerController {
         ]
         if let match = names.first(where: { value.contains($0.0) }) { return match.1 }
         for code in ["de", "en", "es", "fr", "it", "ja", "ko", "zh", "pt", "ru", "ar"] {
-            if value.contains("[(code)]") || value.contains("((code))") { return code }
+            if value.contains("[\(code)]") || value.contains("(\(code))") { return code }
         }
         return "und"
     }
@@ -196,6 +196,7 @@ private final class HarborVLCEngine: NSObject {
 
     var onState: (@MainActor (Bool, Bool, Bool, Bool) -> Void)?
     var onTime: (@MainActor (TimeInterval, TimeInterval) -> Void)?
+    private var lastTimeEmission = 0.0
 
     override init() {
         super.init()
@@ -208,13 +209,16 @@ private final class HarborVLCEngine: NSObject {
         let media = VLCMedia(url: url)
         for (key, value) in headers {
             switch key.lowercased() {
-            case "referer", "referrer": media.addOption(":http-referrer=(value)")
-            case "user-agent": media.addOption(":http-user-agent=(value)")
+            case "referer", "referrer": media.addOption(":http-referrer=\(value)")
+            case "user-agent": media.addOption(":http-user-agent=\(value)")
             default: break
             }
         }
-        media.addOption(":network-caching=(networkCachingMs)")
-        media.addOption(":file-caching=(networkCachingMs)")
+        media.addOption(":network-caching=\(networkCachingMs)")
+        media.addOption(":file-caching=\(networkCachingMs)")
+        media.addOption(":avcodec-hw=videotoolbox")
+        media.addOption(":drop-late-frames")
+        media.addOption(":skip-frames")
         media.addOption(":http-reconnect")
         media.addOption(":no-video-title-show")
         player.media = media
@@ -241,14 +245,14 @@ private final class HarborVLCEngine: NSObject {
     var audioTracks: [EngineTrack] {
         zip(player.audioTrackIndexes, player.audioTrackNames).compactMap { index, name in
             guard let id = (index as? NSNumber)?.int32Value else { return nil }
-            return EngineTrack(id: id, name: (name as? String) ?? "Audio (id)")
+            return EngineTrack(id: id, name: (name as? String) ?? "Audio \(id)")
         }
     }
 
     var subtitleTracks: [EngineTrack] {
         zip(player.videoSubTitlesIndexes, player.videoSubTitlesNames).compactMap { index, name in
             guard let id = (index as? NSNumber)?.int32Value else { return nil }
-            return EngineTrack(id: id, name: (name as? String) ?? "Subtitle (id)")
+            return EngineTrack(id: id, name: (name as? String) ?? "Subtitle \(id)")
         }
     }
 
@@ -277,6 +281,10 @@ extension HarborVLCEngine: VLCMediaPlayerDelegate {
     func mediaPlayerTimeChanged(_ notification: Notification) {
         let current = currentTime
         let total = duration
+        let now = CACurrentMediaTime()
+        guard now - lastTimeEmission >= 0.24 || current < 0.5
+                || (total > 0 && total - current < 0.5) else { return }
+        lastTimeEmission = now
         MainActor.assumeIsolated { onTime?(current, total) }
     }
 }

@@ -47,9 +47,11 @@ final class MPVViewController: UIViewController, HarborPlayerController {
     private weak var model: PlayerModel?
     private let startAt: Double
     private let requestHeaders: [String: String]
-    private(set) var anime4KActive: Bool
+    private var anime4KRequested: Bool
+    private(set) var anime4KActive = false
+    private var anime4KDecisionMade: Bool
     private var metalLayer: CAMetalLayer?
-    private var poll: Timer?
+    private var poll: DispatchSourceTimer?
     private let mpvQueue = DispatchQueue(label: "app.harbor.tvos.mpv")
     private let log = Logger(subsystem: "app.harbor.tvos", category: "mpv")
 
@@ -58,7 +60,8 @@ final class MPVViewController: UIViewController, HarborPlayerController {
         self.url = url
         self.model = model
         self.startAt = startAt
-        self.anime4KActive = anime4K
+        self.anime4KRequested = anime4K
+        self.anime4KDecisionMade = !anime4K
         self.requestHeaders = requestHeaders
         super.init(nibName: nil, bundle: nil)
     }
@@ -83,9 +86,14 @@ final class MPVViewController: UIViewController, HarborPlayerController {
         // video but produced no audio-unit output on Apple TV).
         setupMPV()
 
-        poll = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
-            self?.tick()
-        }
+        // Poll mpv away from the main run loop. A main-thread Timer caused focus
+        // animation hitches whenever the GPU was already busy with Anime4K.
+        let timer = DispatchSource.makeTimerSource(queue: mpvQueue)
+        timer.schedule(deadline: .now() + .milliseconds(200),
+                       repeating: .milliseconds(400), leeway: .milliseconds(80))
+        timer.setEventHandler { [weak self] in self?.tickOnPlayerQueue() }
+        timer.resume()
+        poll = timer
     }
 
     override func viewDidLayoutSubviews() {
@@ -159,7 +167,7 @@ final class MPVViewController: UIViewController, HarborPlayerController {
         // performs its own scaling, so stacking gpu-hq on top only wastes GPU time.
         let defaults = UserDefaults.standard
         if (defaults.string(forKey: SubtitleStyle.Key.mpvQuality) ?? "balanced") == "quality",
-           !anime4KActive {
+           !anime4KRequested {
             mpv_set_option_string(ctx, "profile", "gpu-hq")
         } else {
             mpv_set_option_string(ctx, "profile", "fast")
@@ -208,19 +216,20 @@ final class MPVViewController: UIViewController, HarborPlayerController {
         setOpt("stream-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_delay_max=7")
         applyAudioOptions(defaults)
         applyPictureOptions(defaults)
-        if anime4KActive {
-            applyAnime4KRendererOptions(setOpt)
-            applyAnime4K(setOpt)
-        }
         setOpt("cache", "yes")
-        if defaults.bool(forKey: SubtitleStyle.Key.mpvBufferBoost) {
+        if anime4KRequested {
+            // Leave headroom for shader textures on memory-constrained Apple TVs.
+            setOpt("demuxer-readahead-secs", "45")
+            setOpt("demuxer-max-bytes", "96MiB")
+            setOpt("demuxer-max-back-bytes", "8MiB")
+        } else if defaults.bool(forKey: SubtitleStyle.Key.mpvBufferBoost) {
             setOpt("demuxer-readahead-secs", "300")
-            setOpt("demuxer-max-bytes", "384MiB")
-            setOpt("demuxer-max-back-bytes", "48MiB")
+            setOpt("demuxer-max-bytes", "256MiB")
+            setOpt("demuxer-max-back-bytes", "32MiB")
         } else {
             setOpt("demuxer-readahead-secs", "60")
-            setOpt("demuxer-max-bytes", "128MiB")
-            setOpt("demuxer-max-back-bytes", "16MiB")
+            setOpt("demuxer-max-bytes", "96MiB")
+            setOpt("demuxer-max-back-bytes", "12MiB")
         }
         setOpt("keep-open", "yes")
         let initializeResult = mpv_initialize(ctx)
@@ -282,19 +291,20 @@ final class MPVViewController: UIViewController, HarborPlayerController {
         }
     }
 
-    private func tick() {
-        mpvQueue.async { [weak self] in
-            guard let self, self.mpv != nil else { return }
-            let pos = self.getDouble("time-pos")
-            let dur = self.getDouble("duration")
-            let paused = self.getFlag("pause")
-            DispatchQueue.main.async {
-                guard let m = self.model else { return }
-                if pos.isFinite, abs(m.position - pos) > 0.04 { m.position = pos }
-                if dur.isFinite, dur > 0, abs(m.duration - dur) > 0.2 { m.duration = dur }
-                if dur.isFinite, dur > 0, !m.ready { m.ready = true }
-                if m.paused != paused { m.paused = paused }
-            }
+    private func tickOnPlayerQueue() {
+        guard mpv != nil else { return }
+        if anime4KRequested, !anime4KDecisionMade {
+            configureAnime4KForCurrentVideo()
+        }
+        let pos = getDouble("time-pos")
+        let dur = getDouble("duration")
+        let paused = getFlag("pause")
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let m = self.model else { return }
+            if pos.isFinite, abs(m.position - pos) > 0.08 { m.position = pos }
+            if dur.isFinite, dur > 0, abs(m.duration - dur) > 0.2 { m.duration = dur }
+            if dur.isFinite, dur > 0, !m.ready { m.ready = true }
+            if m.paused != paused { m.paused = paused }
         }
     }
 
@@ -344,17 +354,17 @@ final class MPVViewController: UIViewController, HarborPlayerController {
     func setAudioDelay(_ s: Double) { mpvQueue.async { [weak self] in self?.setString("audio-delay", String(format: "%.2f", s)) } }
 
     func setAnime4K(_ enabled: Bool) {
-        let chain = enabled ? Anime4KShaders.chain() : []
-        let willEnable = enabled && !chain.isEmpty
-        anime4KActive = willEnable
         mpvQueue.async { [weak self] in
             guard let self else { return }
-            if willEnable {
-                self.applyAnime4KRendererOptions { self.setString($0, $1) }
-                self.setString("glsl-shaders", chain.map(\.path).joined(separator: ":"))
+            self.anime4KRequested = enabled
+            self.anime4KDecisionMade = !enabled
+            if enabled {
+                self.configureAnime4KForCurrentVideo()
             } else {
+                self.anime4KActive = false
                 self.setString("glsl-shaders", "")
                 self.restoreRendererOptions { self.setString($0, $1) }
+                DispatchQueue.main.async { [weak self] in self?.model?.anime4KActive = false }
             }
         }
     }
@@ -517,6 +527,7 @@ final class MPVViewController: UIViewController, HarborPlayerController {
         set("scale", "bilinear")
         set("cscale", "bilinear")
         set("dscale", "bilinear")
+        set("fbo-format", "rgba8")
         set("correct-downscaling", "no")
         set("sigmoid-upscaling", "no")
         set("video-sync", "audio")
@@ -525,6 +536,7 @@ final class MPVViewController: UIViewController, HarborPlayerController {
 
     private func restoreRendererOptions(_ set: (String, String) -> Void) {
         let defaults = UserDefaults.standard
+        set("fbo-format", "auto")
         applyQualityScaling(defaults, set: set)
         applyMotionOptions(defaults, set: set)
     }
@@ -543,10 +555,26 @@ final class MPVViewController: UIViewController, HarborPlayerController {
         }
     }
 
-    private func applyAnime4K(_ set: (String, String) -> Void) {
+    private func configureAnime4KForCurrentVideo() {
+        let height = getInt("video-params/h")
+        guard height > 0 else { return }
+        anime4KDecisionMade = true
         let chain = Anime4KShaders.chain()
-        guard !chain.isEmpty else { anime4KActive = false; return }
-        set("glsl-shaders", chain.map(\.path).joined(separator: ":"))
+        // 1440p/2160p already exceed Anime4K's useful input range. Avoiding the
+        // 2x intermediate textures here is the hard guard against native-4K OOMs.
+        let willEnable = anime4KRequested && height <= 1080 && !chain.isEmpty
+        anime4KActive = willEnable
+        if willEnable {
+            applyAnime4KRendererOptions { setString($0, $1) }
+            setString("glsl-shaders", chain.map(\.path).joined(separator: ":"))
+        } else {
+            setString("glsl-shaders", "")
+            restoreRendererOptions { setString($0, $1) }
+            if anime4KRequested, height > 1080 {
+                log.notice("Anime4K skipped for native high-resolution input: \(height)p")
+            }
+        }
+        DispatchQueue.main.async { [weak self] in self?.model?.anime4KActive = willEnable }
     }
 
     /// Re-apply subtitle appearance to a running player (after a settings change).
@@ -558,7 +586,8 @@ final class MPVViewController: UIViewController, HarborPlayerController {
     }
 
     func shutdown() {
-        poll?.invalidate(); poll = nil
+        poll?.cancel(); poll = nil
+        model?.anime4KActive = false
         guard let ctx = mpv else { return }
         // Clear the wakeup callback FIRST so it can't fire into a deallocated controller,
         // then wind the core down now (quit is thread-safe) and destroy off-main.
@@ -582,12 +611,9 @@ private enum Anime4KShaders {
         let down4 = "Anime4K_AutoDownscalePre_x4.glsl"
         let files: [String]
         if tier == "fast" {
-            // Single-pass non-CNN Anime4K. This is dramatically cheaper than even
-            // the S CNN and avoids the continuous frame drops seen on Apple TV.
-            switch mode {
-            case "B", "B+B", "BB": files = ["Anime4K_Upscale_DTD_x2.glsl"]
-            default: files = ["Anime4K_Upscale_Original_x2.glsl"]
-            }
+            // DTD has mpv WHEN guards and does no 2x work when the output does not
+            // need meaningful upscaling. Original always allocates 2x intermediates.
+            files = ["Anime4K_Upscale_DTD_x2.glsl"]
         } else if tier == "balanced" {
             switch mode {
             case "B": files = ["Anime4K_Restore_CNN_Soft_S.glsl", "Anime4K_Upscale_CNN_x2_S.glsl"]

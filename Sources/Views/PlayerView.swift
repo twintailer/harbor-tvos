@@ -60,6 +60,9 @@ struct PlayerView: View {
     @State private var autoSkippedSegments = Set<String>()
     @State private var skipButtonVisible = false
     @State private var skipHideTask: Task<Void, Never>?
+    @State private var sessionEngine = ""
+    @State private var engineStartAt = 0.0
+    @State private var engineGeneration = 0
 
     // Scrub-to-seek
     @State private var scrubbing = false
@@ -99,7 +102,6 @@ struct PlayerView: View {
     @AppStorage(SubtitleStyle.Key.autoPlayNext) private var autoPlayNext = true
     @AppStorage(SubtitleStyle.Key.accent) private var accentID = "green"
     @AppStorage(SubtitleStyle.Key.anime4KEnabled) private var anime4KEnabled = false
-    @AppStorage(SubtitleStyle.Key.anime4KAnimeOnly) private var anime4KAnimeOnly = true
     @AppStorage(SubtitleStyle.Key.anime4KIndicator) private var anime4KIndicator = true
     @AppStorage(SubtitleStyle.Key.anime4KMode) private var anime4KMode = "A"
     @AppStorage(SubtitleStyle.Key.showSkipButton) private var showSkipButton = true
@@ -117,8 +119,8 @@ struct PlayerView: View {
     @AppStorage(SubtitleStyle.Key.showAspectButton) private var showAspectButton = true
     @AppStorage(SubtitleStyle.Key.showAnimeButton) private var showAnimeButton = true
 
-    private enum Control: Hashable { case skip, upNext, restart, back, play, fwd, next, source, audio, subs, aspect, speed, anime, scrub }
-    private enum PanelKind { case audio, subtitles, subtitleSettings, aspect, speed, anime, debug }
+    private enum Control: Hashable { case skip, upNext, restart, back, play, fwd, next, source, engine, audio, subs, aspect, speed, anime, scrub }
+    private enum PanelKind { case audio, subtitles, subtitleSettings, aspect, speed, engine, anime, debug }
     @State private var selected: Control = .play
     @State private var lastButton: Control = .play
     @State private var speed: Double = 1.0
@@ -133,22 +135,50 @@ struct PlayerView: View {
         return Set(nested + root).count >= 17
     }
     private var shouldStartAnime4K: Bool {
-        anime4KEnabled && animeAvailable && (!anime4KAnimeOnly || target.isAnime)
+        // Never attach the shader graph to movies or normal series. Applying a
+        // 2x Anime4K graph to native 4K content can exhaust Apple TV GPU memory.
+        anime4KEnabled && animeAvailable && target.isAnime
     }
-    private var usesVLC: Bool { playerEngine == "vlc" }
+    private var animeRequestForPlayer: Bool {
+        target.isAnime && (animeActive || (sessionEngine.isEmpty && shouldStartAnime4K))
+    }
+    private var activeEngine: String {
+        // "Use my style" must be deterministic even for ASS/SSA, and Anime4K
+        // needs mpv's GLSL path. Both therefore override any engine preference.
+        if subAssOverride == "force" || (target.isAnime && animeActive) { return "mpv" }
+        if !sessionEngine.isEmpty { return sessionEngine }
+        if shouldStartAnime4K { return "mpv" }
+        switch playerEngine {
+        case "mpv", "vlc", "ksplayer": return playerEngine
+        default: return "vlc"
+        }
+    }
+    private var usesVLC: Bool { activeEngine == "vlc" }
+    private var usesKSPlayer: Bool { activeEngine == "ksplayer" }
+    private var currentStartAt: Double {
+        engineGeneration == 0 ? target.startAt : engineStartAt
+    }
 
     var body: some View {
         ZStack(alignment: .bottom) {
             Color.black.ignoresSafeArea()
 
             if usesVLC {
-                VLCPlayerView(url: target.url, model: model, startAt: target.startAt,
+                VLCPlayerView(url: target.url, model: model, startAt: currentStartAt,
                               requestHeaders: target.requestHeaders)
                     .ignoresSafeArea()
-            } else {
-                MPVPlayerView(url: target.url, model: model, startAt: target.startAt,
-                              anime4K: shouldStartAnime4K, requestHeaders: target.requestHeaders)
+                    .id("vlc-\(engineGeneration)")
+            } else if usesKSPlayer {
+                KSPlayerEngineView(url: target.url, model: model, startAt: currentStartAt,
+                                   requestHeaders: target.requestHeaders)
                     .ignoresSafeArea()
+                    .id("ksplayer-\(engineGeneration)")
+            } else {
+                MPVPlayerView(url: target.url, model: model, startAt: currentStartAt,
+                              anime4K: animeRequestForPlayer,
+                              requestHeaders: target.requestHeaders)
+                    .ignoresSafeArea()
+                    .id("mpv-\(engineGeneration)")
             }
 
             // UIKit owns ALL remote input.
@@ -166,7 +196,7 @@ struct PlayerView: View {
             } else if upNextActive, !showOptions {
                 upNextPill
             }
-            if animeActive && anime4KIndicator {
+            if model.anime4KActive && anime4KIndicator {
                 VStack {
                     HStack {
                         Spacer()
@@ -209,6 +239,7 @@ struct PlayerView: View {
         .onAppear {
             showInfo = true; selected = .play; scheduleHide()
             animeActive = shouldStartAnime4K
+            sessionEngine = activeEngine
             UIApplication.shared.isIdleTimerDisabled = true
         }
         .onDisappear {
@@ -295,13 +326,13 @@ struct PlayerView: View {
         if showSeekButtons { c.append(.fwd) }
         if showNextButton, target.onEnded != nil { c.append(.next) }
         if target.onChangeSource != nil { c.append(.source) }
+        c.append(.engine)
         if showSpeedButton { c.append(.speed) }
         if showSubtitleButton { c.append(.subs) }
         if showAudioButton, !audioTracks.isEmpty { c.append(.audio) }
         if showAspectButton { c.append(.aspect) }
-        // Anime4K is a video filter, not an anime-only destination. Keep the
-        // control visible for movies and series as requested; automatic startup
-        // may still be limited by the separate "anime only" preference.
+        // Keep the control visible so non-anime content explains why the filter
+        // is unavailable instead of silently exposing a crash-prone toggle.
         if showAnimeButton { c.append(.anime) }
         return c
     }
@@ -356,6 +387,7 @@ struct PlayerView: View {
         case .play:    toggle()
         case .next:    playNextNow()
         case .source:  changeSource()
+        case .engine:  openPanel(.engine)
         case .audio:   openPanel(.audio)
         case .subs:    openPanel(.subtitles)
         case .aspect:  openPanel(.aspect)
@@ -414,6 +446,7 @@ struct PlayerView: View {
                     Spacer()
                     HStack(spacing: 14) {
                         if target.onChangeSource != nil { ctrlButton(.source, "rectangle.2.swap") }
+                        ctrlButton(.engine, "play.rectangle.on.rectangle")
                         if showSpeedButton { ctrlButton(.speed, "speedometer") }
                         if showSubtitleButton { ctrlButton(.subs, "captions.bubble.fill") }
                         if showAudioButton, !audioTracks.isEmpty { ctrlButton(.audio, "waveform.circle.fill") }
@@ -591,7 +624,12 @@ struct PlayerView: View {
             rows.append(OptionRow(label: "Styled (ASS) subtitles", isHeader: true))
             for value in SubtitleStyle.assOverrides {
                 rows.append(OptionRow(label: value.label, isSelected: subAssOverride == value.id) {
-                    subAssOverride = value.id; applySubtitleStyleSoon()
+                    subAssOverride = value.id
+                    if value.id == "force", activeEngine != "mpv" {
+                        switchEngine(to: "mpv")
+                    } else {
+                        applySubtitleStyleSoon()
+                    }
                 })
             }
             if subStyle == "box" {
@@ -695,11 +733,30 @@ struct PlayerView: View {
                     speed = s; model.controller?.setSpeed(s)
                 }
             }
+        case .engine:
+            var rows = [
+                OptionRow(label: "Active engine", detail: engineDisplayName(activeEngine), isHeader: true),
+                OptionRow(label: "MPV", detail: "Anime4K · full subtitle styling",
+                          isSelected: activeEngine == "mpv") { switchEngine(to: "mpv") },
+            ]
+            if subAssOverride == "force" || (target.isAnime && animeActive) {
+                let reason = subAssOverride == "force" ? "Use my style requires MPV" : "Anime4K requires MPV"
+                rows.append(OptionRow(label: reason, isHeader: true))
+            } else {
+                rows.append(OptionRow(label: "VLC", detail: "Fast default · broad compatibility",
+                                      isSelected: activeEngine == "vlc") { switchEngine(to: "vlc") })
+                rows.append(OptionRow(label: "KSPlayer", detail: "FFmpeg + Metal fallback",
+                                      isSelected: activeEngine == "ksplayer") { switchEngine(to: "ksplayer") })
+            }
+            rows.append(OptionRow(label: "Default for future videos", detail: defaultEngineDisplayName,
+                                  isHeader: true))
+            return rows
         case .anime:
-            if usesVLC {
+            if !target.isAnime {
                 return [
-                    OptionRow(label: "Anime4K needs MPV", detail: "VLC cannot run GLSL shaders", isHeader: true),
-                    OptionRow(label: "Use MPV next playback", isSelected: false) { playerEngine = "mpv" },
+                    OptionRow(label: "Anime4K is limited to Anime", isHeader: true),
+                    OptionRow(label: "Disabled for movies and regular series",
+                              detail: "Prevents native-4K GPU crashes", isHeader: true),
                 ]
             }
             if !animeAvailable {
@@ -714,7 +771,11 @@ struct PlayerView: View {
                           isSelected: animeActive && anime4KMode == choice.id) {
                     anime4KMode = choice.id
                     animeActive = true
-                    model.controller?.setAnime4K(true)
+                    if activeEngine != "mpv" {
+                        switchEngine(to: "mpv")
+                    } else {
+                        model.controller?.setAnime4K(true)
+                    }
                 }
             }
             return rows
@@ -783,6 +844,7 @@ struct PlayerView: View {
         case .subtitleSettings: return "Subtitle Settings"
         case .aspect: return "Aspect Ratio"
         case .speed: return "Playback Speed"
+        case .engine: return "Playback Engine"
         case .anime: return "Anime4K"
         case .debug: return "Debug"
         }
@@ -1068,6 +1130,62 @@ struct PlayerView: View {
         commitScrubIfNeeded()
         onChangeSource(position)
         dismiss()
+    }
+
+    /// Rebuild only the decoder surface and keep Harbor's chrome/navigation alive.
+    /// This makes an engine change behave like a quality switch rather than closing
+    /// the player or losing the current episode position.
+    private func switchEngine(to engine: String) {
+        guard ["mpv", "vlc", "ksplayer"].contains(engine) else { return }
+        if engine != "mpv", subAssOverride == "force" || (target.isAnime && animeActive) {
+            return
+        }
+        guard activeEngine != engine else {
+            applySubtitleStyleSoon()
+            return
+        }
+
+        let position = scrubbing ? scrubTarget : model.position
+        commitScrubIfNeeded()
+        engineStartAt = max(0, position)
+        model.controller = nil
+        model.ready = false
+        model.ended = false
+        model.paused = false
+        model.anime4KActive = false
+        model.position = engineStartAt
+        audioTracks = []
+        subtitleTracks = []
+        selectedAudioTrackID = nil
+        selectedSubtitleTrackID = -1
+        audioCodec = ""
+        audioOut = ""
+        appliedAutoTracks = false
+        appliedAudioLanguage = false
+        appliedSubtitleLanguage = false
+        appliedDefaultSpeed = false
+        autoTrackAttempts = 0
+        lastTrackRefresh = .distantPast
+        readyAt = .distantFuture
+        sessionEngine = engine
+        engineGeneration += 1
+    }
+
+    private func engineDisplayName(_ engine: String) -> String {
+        switch engine {
+        case "vlc": return "VLC"
+        case "ksplayer": return "KSPlayer"
+        default: return "MPV"
+        }
+    }
+
+    private var defaultEngineDisplayName: String {
+        switch playerEngine {
+        case "mpv": return "MPV"
+        case "vlc": return "VLC"
+        case "ksplayer": return "KSPlayer"
+        default: return "Auto · VLC / MPV when required"
+        }
     }
 
     // MARK: - Intro / recap / credits skipping

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Common surface used by the player chrome. MPV and VLC both conform, so the
+/// Common surface used by the player chrome. MPV, VLC and KSPlayer conform, so
 /// controls never need to know which decoder currently owns the video view.
 @MainActor
 protocol HarborPlayerController: AnyObject {
@@ -30,6 +30,7 @@ final class PlayerModel: ObservableObject {
     @Published var paused: Bool = false
     @Published var ready: Bool = false
     @Published var ended: Bool = false
+    @Published var anime4KActive: Bool = false
     /// Last mpv warn/error log lines, shown in the in-player Debug panel so playback
     /// problems can be read directly on the Apple TV (no Mac needed).
     @Published var logLines: [String] = []

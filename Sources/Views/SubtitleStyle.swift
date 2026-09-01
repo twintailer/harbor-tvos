@@ -318,6 +318,10 @@ enum SubtitleStyle {
         let boxColor = str(Key.boxColor, defaultBoxColor)
         let assOverride = str(Key.assOverride, "no")
         let forceMargins = assOverride == "no" ? "no" : "yes"
+        // mpv's `force` mode intentionally preserves some potentially destructive
+        // ASS tags. Harbor's "Use my style" promises the opposite, so strip the
+        // script styling completely and render the remaining text with sub-*.
+        let effectiveAssOverride = assOverride == "force" ? "strip" : assOverride
 
         var opts: [(String, String)] = []
         opts.append(("sub-font-size", "32"))
@@ -329,7 +333,9 @@ enum SubtitleStyle {
         opts.append(("sub-pos", String(format: "%.0f", max(0, min(100, 100 - margin)))))
         opts.append(("sub-align-x", alignment))
         opts.append(("sub-font", fontName(font)))
-        opts.append(("sub-ass-override", assOverride))
+        opts.append(("sub-ass-override", effectiveAssOverride))
+        opts.append(("embeddedfonts", assOverride == "force" ? "no" : "yes"))
+        opts.append(("sub-ass-use-video-data", assOverride == "force" ? "none" : "all"))
         opts.append(("sub-ass-force-margins", forceMargins))
         opts.append(("sub-use-margins", forceMargins))
         opts.append(("sub-line-spacing", String(format: "%.1f", lineSpacing)))

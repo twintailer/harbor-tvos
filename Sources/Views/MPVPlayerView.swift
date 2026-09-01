@@ -1,5 +1,5 @@
 import SwiftUI
-import Libmpv
+import libmpv
 import AVFoundation
 import os
 
@@ -191,7 +191,7 @@ final class MPVViewController: UIViewController, HarborPlayerController {
         default: setOpt("hwdec", "videotoolbox")
         }
         setOpt("video-rotate", "no")
-        // MPVKit 1.0.0 enables mpv's AVSampleBufferAudioRenderer output on tvOS.
+        // The shared FFmpegKit/libmpv build enables AVSampleBufferAudioRenderer on tvOS.
         // Prefer it because AudioUnit cannot query the channel layout of some tvOS 26
         // HDMI routes (notably the 32-channel route exposed by Apple TV 4K), which
         // leaves `current-ao` empty and produces no sound. Keep AudioUnit as a fallback

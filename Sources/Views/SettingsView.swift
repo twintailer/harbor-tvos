@@ -505,7 +505,7 @@ private struct PlayerPanel: View {
     private var engineLabel: String {
         switch playerEngine {
         case "vlc": return "VLC · TVVLCKit"
-        case "mpv": return "MPV · MPVKit"
+        case "mpv": return "MPV · shared FFmpegKit"
         case "ksplayer": return "KSPlayer · FFmpeg/Metal"
         default: return "Auto · VLC"
         }
@@ -1043,7 +1043,7 @@ private struct AdvancedPanel: View {
             Section("About") {
                 LabeledContent("App", value: "Harbor for Apple TV")
                 LabeledContent("Version", value: version)
-                LabeledContent("Player", value: "mpv · MPVKit-GPL")
+                LabeledContent("Player", value: "VLC · MPV · KSPlayer")
                 LabeledContent("Platform", value: "tvOS 17+")
             }
         }

@@ -229,7 +229,7 @@ struct StreamOption: Codable, Identifiable {
         infoHash = try? container.decode(String.self, forKey: .infoHash)
         behaviorHints = try? container.decode(BehaviorHints.self, forKey: .behaviorHints)
     }
-    // MPVKit can play direct HTTP(S)/HLS/MKV links. Magnet/torrent-only results
+    // libmpv can play direct HTTP(S)/HLS/MKV links. Magnet/torrent-only results
     // still need a debrid or remote server URL because tvOS has no local engine.
     var isPlayable: Bool {
         guard let u = url else { return false }

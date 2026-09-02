@@ -86,7 +86,6 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
-            .scrollContentBackground(.hidden)
             .background(HarborStageBackground())
             .onExitCommand(perform: onRootBack)
         }

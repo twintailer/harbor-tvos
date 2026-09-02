@@ -8,9 +8,20 @@ settings:
     DEVELOPMENT_TEAM: ""
     SWIFT_VERSION: "5.0"
 packages:
+  # MPVKit contains Harbor's tested tvOS MoltenVK render context. Mainline
+  # libmpv builds cannot attach gpu-next to our CAMetalLayer on Apple TV.
   MPVKit:
     url: https://github.com/mpvkit/MPVKit
-    exactVersion: 0.41.0
+    exactVersion: 1.0.0
+  # Binary VLCKit package with a native tvOS slice. This is the same fallback
+  # engine used by the supplied Orivio Apple TV reference project.
+  VLCKit:
+    url: https://github.com/tylerjonesio/vlckit-spm
+    from: 3.6.0
+  # Prepared by scripts/prepare-ksplayer-lite.py. This is real KSPlayer using
+  # KSAVPlayer, without its conflicting optional FFmpeg fallback.
+  KSPlayer:
+    path: Vendor/KSPlayerLite
 targets:
   HarborTV:
     type: application
@@ -18,18 +29,22 @@ targets:
     sources:
       - path: Sources
       - path: Assets.xcassets
+      - path: Resources/Anime4K
+        type: folder
+        buildPhase: resources
     dependencies:
       - package: MPVKit
-        # GPL variant — the one StremioX ships on real Apple TVs. The plain MPVKit
-        # product's tvOS slice initialized NO audio output at all ("AO —" on device);
-        # with -GPL the default driver chain works.
         product: MPVKit-GPL
+      - package: VLCKit
+        product: VLCKitSPM
+      - package: KSPlayer
+        product: KSPlayer
     info:
       path: Info.plist
       properties:
         CFBundleDisplayName: Harbor
-        CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "1"
+        CFBundleShortVersionString: "0.4.1"
+        CFBundleVersion: "16"
         UIRequiredDeviceCapabilities: [arm64]
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
@@ -45,6 +60,4 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: "App Icon & Top Shelf Image"
         TARGETED_DEVICE_FAMILY: "3"
         ENABLE_BITCODE: false
-        CODE_SIGNING_ALLOWED: false
-        CODE_SIGN_IDENTITY: ""
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks"

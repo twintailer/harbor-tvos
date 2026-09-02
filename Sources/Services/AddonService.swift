@@ -10,16 +10,32 @@ enum AddonService {
         if catalogAddons.isEmpty {
             return await CinemetaRows()
         }
-        var rows: [CatalogRow] = []
+        let showAll = UserDefaults.standard.bool(forKey: SubtitleStyle.Key.homeShowAllRows)
+        var requests: [(index: Int, base: String, type: String, id: String, title: String)] = []
         for addon in catalogAddons {
-            for cat in (addon.manifest?.catalogs ?? []).prefix(6) {
-                let items = await catalog(base: addon.base, type: cat.type, id: cat.id)
-                if !items.isEmpty {
-                    let label = cat.name ?? "\(cat.type.capitalized) · \(cat.id)"
-                    rows.append(CatalogRow(title: label, items: items))
-                }
+            let catalogs = addon.manifest?.catalogs ?? []
+            for cat in showAll ? catalogs[...] : catalogs.prefix(6) {
+                requests.append((requests.count, addon.base, cat.type, cat.id,
+                                 cat.name ?? "\(cat.type.capitalized) · \(cat.id)"))
             }
         }
+        var indexedRows: [(Int, CatalogRow)] = []
+        await withTaskGroup(of: (Int, CatalogRow?).self) { group in
+            for request in requests {
+                group.addTask {
+                    let items = await catalog(base: request.base, type: request.type, id: request.id)
+                    let source = CatalogPageSource(base: request.base, type: request.type,
+                                                   catalogID: request.id)
+                    let row = items.isEmpty ? nil : CatalogRow(title: request.title, items: items,
+                                                               source: source)
+                    return (request.index, row)
+                }
+            }
+            for await (index, row) in group {
+                if let row { indexedRows.append((index, row)) }
+            }
+        }
+        let rows = indexedRows.sorted { $0.0 < $1.0 }.map { $0.1 }
         return rows.isEmpty ? await CinemetaRows() : rows
     }
 
@@ -27,23 +43,36 @@ enum AddonService {
         async let m = catalog(base: CatalogService.cinemeta, type: "movie", id: "top")
         async let s = catalog(base: CatalogService.cinemeta, type: "series", id: "top")
         return [
-            CatalogRow(title: "Trending Movies", items: await m),
-            CatalogRow(title: "Trending Series", items: await s),
+            CatalogRow(title: "Trending Movies", items: await m,
+                       source: CatalogPageSource(base: CatalogService.cinemeta,
+                                                 type: "movie", catalogID: "top")),
+            CatalogRow(title: "Trending Series", items: await s,
+                       source: CatalogPageSource(base: CatalogService.cinemeta,
+                                                 type: "series", catalogID: "top")),
         ].filter { !$0.items.isEmpty }
     }
 
-    static func catalog(base: String, type: String, id: String, genre: String? = nil) async -> [MetaItem] {
+    static func catalog(base: String, type: String, id: String, genre: String? = nil,
+                        skip: Int = 0) async -> [MetaItem] {
         var path = "\(base)/catalog/\(type)/\(id)"
+        var extras: [String] = []
         if let genre, !genre.isEmpty,
            let enc = genre.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) {
-            path += "/genre=\(enc)"
+            extras.append("genre=\(enc)")
         }
+        if skip > 0 { extras.append("skip=\(skip)") }
+        if !extras.isEmpty { path += "/" + extras.joined(separator: "&") }
         path += ".json"
         guard let url = URL(string: path) else { return [] }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
             return (try JSONDecoder().decode(CatalogResponse.self, from: data)).metas ?? []
         } catch { return [] }
+    }
+
+    static func catalog(source: CatalogPageSource, skip: Int) async -> [MetaItem] {
+        await catalog(base: source.base, type: source.type, id: source.catalogID,
+                      genre: source.genre, skip: skip)
     }
 
     // Prefer a user meta-addon that actually serves this id (matching id-prefix), then any other
@@ -59,6 +88,48 @@ enum AddonService {
             if let m = await metaFrom(base: addon.base, type: type, id: id) { return m }
         }
         return await metaFrom(base: CatalogService.cinemeta, type: type, id: id)
+    }
+
+    static func search(addons: [Addon], query: String) async -> [MetaItem] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        var pathCharacters = CharacterSet.urlPathAllowed
+        pathCharacters.remove(charactersIn: "/?#")
+        let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: pathCharacters) ?? trimmed
+        let sources = addons.flatMap { addon in
+            (addon.manifest?.catalogs ?? []).filter {
+                ["movie", "series", "anime"].contains($0.type)
+                    && ($0.extra ?? []).contains(where: { $0.name.caseInsensitiveCompare("search") == .orderedSame })
+            }.prefix(8).map { (addon.base, $0.type, $0.id) }
+        }
+        guard !sources.isEmpty else { return await CatalogService.search(query: trimmed) }
+        var combined: [MetaItem] = []
+        await withTaskGroup(of: [MetaItem].self) { group in
+            for (base, type, id) in sources {
+                group.addTask {
+                    guard let url = URL(string: "\(base)/catalog/\(type)/\(id)/search=\(encoded).json"),
+                          let (data, _) = try? await URLSession.shared.data(from: url),
+                          let response = try? JSONDecoder().decode(CatalogResponse.self, from: data)
+                    else { return [] }
+                    return response.metas ?? []
+                }
+            }
+            for await result in group { combined.append(contentsOf: result) }
+        }
+        var seen = Set<String>()
+        let unique = combined.filter {
+            isRelevantSearchResult($0, query: trimmed)
+                && seen.insert("\($0.type):\($0.id)").inserted
+        }
+        return unique.isEmpty ? await CatalogService.search(query: trimmed) : unique
+    }
+
+    private static func isRelevantSearchResult(_ item: MetaItem, query: String) -> Bool {
+        let normalizedName = item.name.folding(options: [.caseInsensitive, .diacriticInsensitive],
+                                               locale: .current)
+        let tokens = query.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .split(whereSeparator: { $0.isWhitespace })
+        return !tokens.isEmpty && tokens.allSatisfy { normalizedName.contains($0) }
     }
 
     private static func metaFrom(base: String, type: String, id: String) async -> MetaItem? {
@@ -88,8 +159,13 @@ extension StremioService {
         let name: String?
         let poster: String?
         let background: String?
+        let releaseInfo: String?
+        let year: String?
         let removed: Bool?
         let temp: Bool?
+        let _ctime: String?
+        let _mtime: String?
+        let isAnime: Bool?
         let state: State?
         struct State: Codable {
             let timeOffset: Double?
@@ -119,7 +195,8 @@ extension StremioService {
         var asMeta: MetaItem {
             MetaItem(id: _id, type: type ?? "movie", name: name ?? _id,
                      poster: poster, background: background, description: nil,
-                     releaseInfo: nil, imdbRating: nil, genres: nil, runtime: nil, videos: nil)
+                     releaseInfo: releaseInfo ?? year, imdbRating: nil,
+                     genres: nil, runtime: nil, videos: nil)
         }
 
         /// Season/episode for the CW card: state fields first, else parsed from
@@ -155,6 +232,135 @@ extension StremioService {
             .sorted { ($0.state?.lastWatched ?? "") > ($1.state?.lastWatched ?? "") }
     }
 
+    static func library(authKey: String) async -> [LibraryItem] {
+        guard let items: [LibraryItem] = try? await postArray(
+            "datastoreGet",
+            ["authKey": authKey, "collection": "libraryItem", "ids": [], "all": true])
+        else { return [] }
+        return items.filter { !($0.removed ?? false) || ($0.temp ?? false) }
+    }
+
+    static func saveProgress(authKey: String, meta: MetaItem, videoId: String,
+                             season: Int?, episode: Int?, position: Double,
+                             duration: Double, existing: LibraryItem?) async {
+        guard duration > 0, position >= 0 else { return }
+        let now = ISO8601DateFormatter().string(from: Date())
+        let watched = position / duration >= 0.9
+        let creditsReached = position / duration >= 0.98
+        let libraryType = season != nil || episode != nil
+            ? "series" : (meta.type == "anime" ? "movie" : meta.type)
+        let raw = await rawLibraryItem(authKey: authKey, id: meta.id)
+        if existing != nil && raw == nil { return }
+        var change = raw ?? [
+            "_id": meta.id,
+            "type": libraryType,
+            "name": meta.name,
+            "posterShape": "poster",
+            // Playback creates a temporary history entry; only the explicit Library
+            // button turns it into a bookmark.
+            "removed": true,
+            "temp": true,
+            "_ctime": existing?._ctime ?? now,
+            "behaviorHints": [
+                "defaultVideoId": NSNull(),
+                "featuredVideoId": NSNull(),
+                "hasScheduledVideos": false,
+            ],
+        ]
+        var state = (change["state"] as? [String: Any]) ?? [:]
+        let oldVideoId = state["video_id"] as? String
+        let videoChanged = oldVideoId != nil && oldVideoId != videoId
+        let oldTimeWatched = numeric(state["timeWatched"])
+        let oldOverall = numeric(state["overallTimeWatched"])
+        let oldTimesWatched = Int(numeric(state["timesWatched"]))
+        let oldFlagged = Int(numeric(state["flaggedWatched"]))
+        state["timeOffset"] = creditsReached ? 0 : Int(position * 1000)
+        state["duration"] = Int(duration * 1000)
+        state["timeWatched"] = Int(position * 1000)
+        state["overallTimeWatched"] = oldOverall + (videoChanged ? oldTimeWatched : 0)
+        state["timesWatched"] = watched && (videoChanged || oldFlagged == 0)
+            ? oldTimesWatched + 1 : oldTimesWatched
+        state["flaggedWatched"] = watched ? 1 : (videoChanged ? 0 : oldFlagged)
+        state["video_id"] = videoId
+        state["lastWatched"] = now
+        if state["watched"] == nil { state["watched"] = "" }
+        if state["noNotif"] == nil { state["noNotif"] = false }
+        if let season { state["season"] = season }
+        if let episode { state["episode"] = episode }
+        change["type"] = libraryType
+        change["name"] = meta.name
+        if change["removed"] == nil { change["removed"] = true }
+        if change["temp"] == nil { change["temp"] = existing?.temp ?? true }
+        change["_mtime"] = now
+        change["state"] = state
+        if let poster = meta.poster { change["poster"] = poster }
+        if let background = meta.background { change["background"] = background }
+        await putLibraryChange(authKey: authKey, change: change)
+    }
+
+    static func setBookmarked(authKey: String, meta: MetaItem, existing: LibraryItem?,
+                              bookmarked: Bool) async {
+        let now = ISO8601DateFormatter().string(from: Date())
+        let libraryType = (meta.videos?.isEmpty == false)
+            ? "series" : (meta.type == "anime" ? "movie" : meta.type)
+        var change: [String: Any]
+        if let object = await rawLibraryItem(authKey: authKey, id: meta.id) {
+            change = object
+        } else if existing != nil {
+            return
+        } else {
+            change = [
+                "_id": meta.id,
+                "type": libraryType,
+                "name": meta.name,
+                "posterShape": "poster",
+                "_ctime": now,
+                "state": [
+                    "timeOffset": 0, "duration": 0, "timeWatched": 0,
+                    "overallTimeWatched": 0, "timesWatched": 0,
+                    "flaggedWatched": 0, "watched": "", "noNotif": false,
+                ],
+                "behaviorHints": [
+                    "defaultVideoId": NSNull(),
+                    "featuredVideoId": NSNull(),
+                    "hasScheduledVideos": false,
+                ],
+            ]
+            if let poster = meta.poster { change["poster"] = poster }
+            if let background = meta.background { change["background"] = background }
+        }
+        let state = change["state"] as? [String: Any]
+        let hasProgress = numeric(state?["timeOffset"]) > 0 ||
+            numeric(state?["flaggedWatched"]) > 0
+        change["removed"] = !bookmarked
+        change["temp"] = bookmarked ? false : hasProgress
+        change["_mtime"] = now
+
+        await putLibraryChange(authKey: authKey, change: change)
+    }
+
+    /// Desktop Harbor's Continue-Watching dismiss keeps the library/history record
+    /// but clears its resume position. That makes the title disappear from the rail
+    /// without also deleting a user's watchlist bookmark.
+    static func clearContinueWatching(authKey: String, id: String) async {
+        guard var change = await rawLibraryItem(authKey: authKey, id: id) else { return }
+        var state = (change["state"] as? [String: Any]) ?? [:]
+        state["timeOffset"] = 0
+        change["state"] = state
+        change["_mtime"] = ISO8601DateFormatter().string(from: Date())
+        await putLibraryChange(authKey: authKey, change: change)
+    }
+
+    /// History's destructive context action mirrors Harbor desktop: remove the
+    /// Stremio library record from visible history rather than only hiding it locally.
+    static func removeFromHistory(authKey: String, id: String) async {
+        guard var change = await rawLibraryItem(authKey: authKey, id: id) else { return }
+        change["removed"] = true
+        change["temp"] = false
+        change["_mtime"] = ISO8601DateFormatter().string(from: Date())
+        await putLibraryChange(authKey: authKey, change: change)
+    }
+
     /// One library item (for a series detail page: current episode + progress). all:false = just this id.
     static func libraryItem(authKey: String, id: String) async -> LibraryItem? {
         guard let items: [LibraryItem] = try? await postArray(
@@ -162,6 +368,44 @@ extension StremioService {
             ["authKey": authKey, "collection": "libraryItem", "ids": [id], "all": false])
         else { return nil }
         return items.first { $0._id == id }
+    }
+
+    private static func rawLibraryItem(authKey: String, id: String) async -> [String: Any]? {
+        guard let url = URL(string: "\(api)/datastoreGet") else { return nil }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "authKey": authKey,
+            "collection": "libraryItem",
+            "ids": [id],
+            "all": false,
+        ])
+        guard let (data, _) = try? await URLSession.shared.data(for: request),
+              let envelope = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let items = envelope["result"] as? [[String: Any]]
+        else { return nil }
+        return items.first { ($0["_id"] as? String) == id }
+    }
+
+    private static func putLibraryChange(authKey: String, change: [String: Any]) async {
+        guard let url = URL(string: "\(api)/datastorePut") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "authKey": authKey,
+            "collection": "libraryItem",
+            "changes": [change],
+        ])
+        _ = try? await URLSession.shared.data(for: request)
+    }
+
+    private static func numeric(_ value: Any?) -> Double {
+        if let value = value as? Double { return value }
+        if let value = value as? Int { return Double(value) }
+        if let value = value as? NSNumber { return value.doubleValue }
+        return 0
     }
 
     // datastore endpoints return a bare array in `result`.

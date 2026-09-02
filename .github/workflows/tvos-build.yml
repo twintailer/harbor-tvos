@@ -1,15 +1,26 @@
 name: tvos-build
 
 # Builds an unsigned tvOS IPA of Harbor for Apple TV on a macOS runner.
-# Trigger from the Actions tab or:  gh workflow run tvos-build.yml
-#
-# NOTE on installing: unlike iPhone (AltStore/Sideloadly), sideloading onto an
-# Apple TV needs Xcode on a Mac with the Apple TV paired (Devices window ->
-# Install), or a paid dev account. The unsigned IPA here is the build output;
-# re-sign/install it with your own Apple ID via Xcode.
+# Trigger from the Actions tab or: gh workflow run tvos-build.yml
+# Installing on Apple TV still requires signing and a paired Mac/Xcode.
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - "Sources/**"
+      - "Resources/**"
+      - "scripts/**"
+      - "project.yml"
+      - ".github/workflows/tvos-build.yml"
+  push:
+    branches: [main]
+    paths:
+      - "Sources/**"
+      - "Resources/**"
+      - "scripts/**"
+      - "project.yml"
+      - ".github/workflows/tvos-build.yml"
 
 jobs:
   build-tvos:
@@ -19,110 +30,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install xcodegen
-        run: brew install xcodegen
-
-      - name: Generate app-icon brand assets (real Harbor icon)
+      - name: Install build tools
         run: |
+          brew install xcodegen
           python3 -m pip install --quiet --user pillow || python3 -m pip install --quiet --break-system-packages pillow
-          python3 - <<'EOF'
-          # Composites the real Harbor icon (Resources/AppIconSource.png, same art as the
-          # iPhone/Windows app) into every tvOS brand-asset format. Layered icons put the
-          # art on the Back layer; Middle/Front stay transparent (standard parallax setup).
-          import os, json
-          from PIL import Image
 
-          SRC = Image.open("Resources/AppIconSource.png").convert("RGBA")
-          # Full-bleed square art -> cover-crop for icon shapes; transparent logo -> center on dark bg.
-          corner = SRC.getpixel((2, 2))
-          FULL_BLEED = corner[3] > 250
-          BG = (13, 17, 23, 255)
+      - name: Generate Apple TV assets
+        run: python3 scripts/generate-assets.py
 
-          def cover(w, h):
-              scale = max(w / SRC.width, h / SRC.height)
-              img = SRC.resize((round(SRC.width * scale), round(SRC.height * scale)), Image.LANCZOS)
-              x = (img.width - w) // 2
-              y = (img.height - h) // 2
-              return img.crop((x, y, x + w, y + h))
+      - name: Bundle pinned Anime4K shaders
+        shell: bash
+        run: bash scripts/fetch-anime4k.sh
 
-          def centered(w, h, frac):
-              img = Image.new("RGBA", (w, h), BG)
-              target_h = int(h * frac)
-              scale = target_h / SRC.height
-              logo = SRC.resize((round(SRC.width * scale), target_h), Image.LANCZOS)
-              img.paste(logo, ((w - logo.width) // 2, (h - logo.height) // 2), logo)
-              return img
-
-          def icon_art(w, h):
-              # Landscape icon: crop the square art if full-bleed, else center the logo.
-              return cover(w, h) if FULL_BLEED else centered(w, h, 0.72)
-
-          def shelf_art(w, h):
-              # Top shelf is extremely wide; always center the logo on a dark banner.
-              return centered(w, h, 0.55)
-
-          def transparent(w, h):
-              return Image.new("RGBA", (w, h), (0, 0, 0, 0))
-
-          ROOT = "Assets.xcassets"
-          BRAND = os.path.join(ROOT, "App Icon & Top Shelf Image.brandassets")
-
-          def write_json(path, obj):
-              with open(path, "w") as f:
-                  json.dump(obj, f, indent=2)
-
-          os.makedirs(ROOT, exist_ok=True)
-          write_json(os.path.join(ROOT, "Contents.json"), {"info": {"author": "xcode", "version": 1}})
-          os.makedirs(BRAND, exist_ok=True)
-
-          def imageset(dirpath, size, filename, render):
-              os.makedirs(dirpath, exist_ok=True)
-              w, h = size
-              render(w, h).save(os.path.join(dirpath, filename))
-              png2 = filename.replace("_1x", "_2x")
-              render(w * 2, h * 2).save(os.path.join(dirpath, png2))
-              write_json(os.path.join(dirpath, "Contents.json"), {
-                  "images": [
-                      {"idiom": "tv", "filename": filename, "scale": "1x"},
-                      {"idiom": "tv", "filename": png2, "scale": "2x"},
-                  ],
-                  "info": {"author": "xcode", "version": 1},
-              })
-
-          def imagestack(dirpath, w, h):
-              os.makedirs(dirpath, exist_ok=True)
-              layers = []
-              for name in ["Back", "Middle", "Front"]:
-                  layerdir = os.path.join(dirpath, name + ".imagestacklayer")
-                  contentdir = os.path.join(layerdir, "Content.imageset")
-                  render = icon_art if name == "Back" else transparent
-                  imageset(contentdir, (w, h), "icon_1x.png", render)
-                  write_json(os.path.join(layerdir, "Contents.json"), {"info": {"author": "xcode", "version": 1}})
-                  layers.append({"filename": name + ".imagestacklayer"})
-              write_json(os.path.join(dirpath, "Contents.json"),
-                         {"layers": layers, "info": {"author": "xcode", "version": 1}})
-
-          imagestack(os.path.join(BRAND, "App Icon.imagestack"), 400, 240)
-          imagestack(os.path.join(BRAND, "App Icon - App Store.imagestack"), 1280, 768)
-          imageset(os.path.join(BRAND, "Top Shelf Image.imageset"), (1920, 720), "top_1x.png", shelf_art)
-          imageset(os.path.join(BRAND, "Top Shelf Image Wide.imageset"), (2320, 720), "topwide_1x.png", shelf_art)
-
-          write_json(os.path.join(BRAND, "Contents.json"), {
-              "assets": [
-                  {"filename": "App Icon.imagestack", "idiom": "tv", "role": "primary-app-icon", "size": "400x240"},
-                  {"filename": "App Icon - App Store.imagestack", "idiom": "tv", "role": "primary-app-icon", "size": "1280x768"},
-                  {"filename": "Top Shelf Image.imageset", "idiom": "tv", "role": "top-shelf-image", "size": "1920x720"},
-                  {"filename": "Top Shelf Image Wide.imageset", "idiom": "tv", "role": "top-shelf-image-wide", "size": "2320x720"},
-              ],
-              "info": {"author": "xcode", "version": 1},
-          })
-          print("brand assets generated from Resources/AppIconSource.png (full_bleed=%s)" % FULL_BLEED)
-          EOF
+      - name: Prepare conflict-free KSPlayer backend
+        run: python3 scripts/prepare-ksplayer-lite.py
 
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Resolve Swift packages (MPVKit ~ 24 xcframeworks)
+      - name: Resolve Swift packages
         run: |
           xcodebuild -project Harbor.xcodeproj -scheme HarborTV \
             -clonedSourcePackagesDirPath spm \
@@ -142,10 +68,9 @@ jobs:
           APP=$(find build -name '*.app' -path '*appletvos*' | head -1)
           echo "APP: $APP"
           test -n "$APP"
-          mkdir -p Payload
+          mkdir -p Payload dist
           cp -R "$APP" Payload/
-          mkdir -p dist
-          (cd . && zip -r -q "dist/Harbor_tvOS_0.1.0_unsigned.ipa" Payload)
+          zip -r -q "dist/Harbor_tvOS_0.4.1_unsigned.ipa" Payload
           ls -la dist
 
       - name: Upload IPA artifact

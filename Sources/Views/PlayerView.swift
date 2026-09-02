@@ -256,11 +256,8 @@ struct PlayerView: View {
             }
         }
         .onReceive(model.$ended) { ended in
-            guard ended, !handledEnd else { return }
-            handledEnd = true
-            target.onProgress?(model.duration, model.duration)
-            if autoPlayNext, let onEnded = target.onEnded { onEnded() }
-            dismiss()
+            guard ended else { return }
+            finishPlayback(playNext: autoPlayNext, markCompleted: true)
         }
         .onAppear {
             showInfo = true; selected = .play; scheduleHide()
@@ -1147,11 +1144,25 @@ struct PlayerView: View {
     }
 
     private func playNextNow() {
-        guard let next = target.onEnded else { return }
+        guard target.onEnded != nil else { return }
+        finishPlayback(playNext: true, markCompleted: false)
+    }
+
+    /// End-of-file and the remote's Next button can arrive during the same run
+    /// loop turn. Funnel both through one guarded transition, queue the parent's
+    /// next-episode request before dismissing, and never present from the player.
+    private func finishPlayback(playNext: Bool, markCompleted: Bool) {
+        guard !handledEnd else { return }
         handledEnd = true
-        target.onProgress?(model.position, model.duration)
+        loadWatchdog?.cancel()
+        hideTask?.cancel()
+        scrubCommit?.cancel()
+        skipHideTask?.cancel()
+
+        let position = markCompleted && model.duration > 0 ? model.duration : model.position
+        target.onProgress?(position, model.duration)
+        if playNext { target.onEnded?() }
         dismiss()
-        next()
     }
 
     private func changeSource() {

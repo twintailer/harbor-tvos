@@ -16,6 +16,10 @@ struct DetailView: View {
     @State private var streamError: String?
     @State private var availableStreams: [StreamOption] = []
     @State private var sourceChangeStart: Double?
+    /// A next episode is resolved only after the current full-screen player has
+    /// finished dismissing. Starting it from inside PlayerView's button handler
+    /// races the old decoder teardown against the next presentation on tvOS.
+    @State private var pendingNextVideo: MetaItem.Video?
     @AppStorage(SubtitleStyle.Key.instantPlay) private var instantPlay = true
     @AppStorage(SubtitleStyle.Key.rememberStream) private var rememberStream = true
     @AppStorage(SubtitleStyle.Key.resume) private var resumePlayback = true
@@ -124,7 +128,7 @@ struct DetailView: View {
                 .padding(.bottom, 80)
             }
         }
-        .fullScreenCover(item: $player) { target in
+        .fullScreenCover(item: $player, onDismiss: playerDidDismiss) { target in
             PlayerView(target: target)
         }
         .sheet(isPresented: Binding(get: { pickerStreams != nil }, set: { if !$0 { pickerStreams = nil } })) {
@@ -282,16 +286,9 @@ struct DetailView: View {
         let playNext: (() -> Void)?
         if let next {
             playNext = {
-                Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 700_000_000)
-                    let id: String
-                    if let season = next.season, let episode = next.episode {
-                        id = "\(meta.id):\(season):\(episode)"
-                    } else {
-                        id = next.id ?? meta.id
-                    }
-                    play(streamId: id, title: episodeFullTitle(next), video: next)
-                }
+                // Queue only. `playerDidDismiss` is the single owner of starting
+                // the following episode after UIKit has removed the old player.
+                if pendingNextVideo == nil { pendingNextVideo = next }
             }
         } else {
             playNext = nil
@@ -329,6 +326,19 @@ struct DetailView: View {
                     pickerStreams = sourceChoices
                 }
             } : nil)
+    }
+
+    private func playerDidDismiss() {
+        guard let next = pendingNextVideo else { return }
+        pendingNextVideo = nil
+        let id = streamID(for: next)
+        // onDismiss runs after the presentation is gone. Yielding once lets the
+        // representable dismantle its native decoder before a cached resolver can
+        // immediately install the next PlayerView.
+        Task { @MainActor in
+            await Task.yield()
+            play(streamId: id, title: episodeFullTitle(next), video: next)
+        }
     }
 
     private func nextEpisode(after video: MetaItem.Video) -> MetaItem.Video? {

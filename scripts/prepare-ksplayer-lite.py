@@ -104,10 +104,16 @@ extension KSOptions {
             return CGColorSpace(name: CGColorSpace.itur_709)
         case kCVImageBufferYCbCrMatrix_ITU_R_2020:
             if transferFunction == kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ {
-                return CGColorSpace(name: CGColorSpace.itur_2100_PQ)
+                if #available(tvOS 14.0, iOS 14.0, macOS 11.0, *) {
+                    return CGColorSpace(name: CGColorSpace.itur_2100_PQ)
+                }
+                return CGColorSpace(name: CGColorSpace.itur_2020)
             }
             if transferFunction == kCVImageBufferTransferFunction_ITU_R_2100_HLG {
-                return CGColorSpace(name: CGColorSpace.itur_2100_HLG)
+                if #available(tvOS 14.0, iOS 14.0, macOS 11.0, *) {
+                    return CGColorSpace(name: CGColorSpace.itur_2100_HLG)
+                }
+                return CGColorSpace(name: CGColorSpace.itur_2020)
             }
             return CGColorSpace(name: CGColorSpace.itur_2020)
         default:

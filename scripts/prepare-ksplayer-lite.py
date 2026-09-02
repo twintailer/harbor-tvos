@@ -53,7 +53,72 @@ def main() -> None:
     new = "static var secondPlayerType: MediaPlayerProtocol.Type? = nil"
     if old not in source:
         raise RuntimeError("Pinned KSPlayer fallback declaration changed unexpectedly")
-    options.write_text(source.replace(old, new, 1), encoding="utf-8")
+    source = source.replace(old, new, 1)
+    renderer_check = "let isUseAudioRenderer = KSOptions.audioPlayerType == AudioRendererPlayer.self"
+    if renderer_check not in source:
+        raise RuntimeError("Pinned KSPlayer audio renderer check changed unexpectedly")
+    source = source.replace(renderer_check, "let isUseAudioRenderer = false", 1)
+    options.write_text(source, encoding="utf-8")
+
+    recognize = TARGET / "Sources" / "KSPlayer" / "Subtitle" / "AudioRecognize.swift"
+    recognize_source = recognize.read_text(encoding="utf-8")
+    audio_frame_requirement = "public protocol AudioRecognize: SubtitleInfo {\n    func append(frame: AudioFrame)\n}"
+    if audio_frame_requirement not in recognize_source:
+        raise RuntimeError("Pinned KSPlayer audio recognition protocol changed unexpectedly")
+    recognize.write_text(
+        recognize_source.replace(audio_frame_requirement,
+                                 "public protocol AudioRecognize: SubtitleInfo {}", 1),
+        encoding="utf-8",
+    )
+
+    # A few color/deinterlace helpers live beside KSMEPlayer upstream even
+    # though KSAVPlayer's shared protocols also reference them. Provide the
+    # small platform-only subset without importing any FFmpeg module.
+    support = '''import CoreGraphics
+import CoreVideo
+
+extension OSType {
+    var bitDepth: Int32 {
+        switch self {
+        case kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+             kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+             kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange,
+             kCVPixelFormatType_422YpCbCr10BiPlanarFullRange,
+             kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange,
+             kCVPixelFormatType_444YpCbCr10BiPlanarFullRange:
+            return 10
+        default:
+            return 8
+        }
+    }
+}
+
+extension KSOptions {
+    static var yadifMode = 0
+    static var deInterlaceAddIdet = false
+
+    static func colorSpace(ycbcrMatrix: CFString?,
+                           transferFunction: CFString?) -> CGColorSpace? {
+        switch ycbcrMatrix {
+        case kCVImageBufferYCbCrMatrix_ITU_R_709_2:
+            return CGColorSpace(name: CGColorSpace.itur_709)
+        case kCVImageBufferYCbCrMatrix_ITU_R_2020:
+            if transferFunction == kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ {
+                return CGColorSpace(name: CGColorSpace.itur_2100_PQ)
+            }
+            if transferFunction == kCVImageBufferTransferFunction_ITU_R_2100_HLG {
+                return CGColorSpace(name: CGColorSpace.itur_2100_HLG)
+            }
+            return CGColorSpace(name: CGColorSpace.itur_2020)
+        default:
+            return CGColorSpace(name: CGColorSpace.sRGB)
+        }
+    }
+}
+'''
+    (TARGET / "Sources" / "KSPlayer" / "AVPlayer" / "HarborLiteSupport.swift").write_text(
+        support, encoding="utf-8"
+    )
 
     manifest = '''// swift-tools-version:5.9
 import PackageDescription
@@ -70,6 +135,13 @@ let package = Package(
         .target(
             name: "KSPlayer",
             dependencies: ["DisplayCriteria"],
+            exclude: [
+                "Metal/DisplayModel.swift",
+                "Metal/MetalRender.swift",
+                "Metal/MotionSensor.swift",
+                "Metal/PixelBufferProtocol.swift",
+                "Metal/Transforms.swift",
+            ],
             resources: [.process("Metal/Shaders.metal")],
             swiftSettings: [.enableExperimentalFeature("StrictConcurrency")]
         ),

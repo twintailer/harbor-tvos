@@ -46,6 +46,7 @@ struct PlayerView: View {
     @State private var lastTrackRefresh = Date.distantPast
     @State private var animeActive = false
     @State private var confirmingLeave = false
+    @State private var leaveSelected = false
     @State private var handledEnd = false
     @State private var lastSavedPosition = 0.0
     @State private var subtitleDelay = 0.0
@@ -229,6 +230,11 @@ struct PlayerView: View {
                 }
                 .padding(34)
             }
+            if confirmingLeave {
+                leavePrompt
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                    .zIndex(20)
+            }
         }
         .onReceive(model.$ready) {
             if $0 {
@@ -277,15 +283,26 @@ struct PlayerView: View {
             if !handledEnd { target.onProgress?(model.position, model.duration) }
             UIApplication.shared.isIdleTimerDisabled = false
         }
-        .confirmationDialog("Leave playback?", isPresented: $confirmingLeave, titleVisibility: .visible) {
-            Button("Leave Playback", role: .destructive) { dismiss() }
-            Button("Keep Watching", role: .cancel) { scheduleHide() }
-        }
     }
 
     // MARK: - Remote handling
 
     private func handlePress(_ type: UIPress.PressType) {
+        if confirmingLeave {
+            switch type {
+            case .leftArrow:
+                withAnimation(.easeOut(duration: 0.12)) { leaveSelected = false }
+            case .rightArrow:
+                withAnimation(.easeOut(duration: 0.12)) { leaveSelected = true }
+            case .select:
+                if leaveSelected { leavePlayback() } else { cancelLeave() }
+            case .playPause:
+                cancelLeave()
+            default:
+                break
+            }
+            return
+        }
         if showOptions {
             switch type {
             case .upArrow: moveOption(-1)
@@ -328,6 +345,10 @@ struct PlayerView: View {
     /// recognizer owns the press, so it cannot also fall through to tvOS and
     /// dismiss the player/app a second time.
     private func handleBack() {
+        if confirmingLeave {
+            cancelLeave()
+            return
+        }
         if showOptions {
             switch panelKind {
             case .subtitleSettings: openPanel(.subtitles)
@@ -1409,10 +1430,94 @@ struct PlayerView: View {
     private func requestDismiss() {
         if confirmLeave && model.ready && model.position > 5 && !model.ended {
             hideTask?.cancel()
-            confirmingLeave = true
+            leaveSelected = false
+            withAnimation(.easeOut(duration: 0.16)) { confirmingLeave = true }
         } else {
+            leavePlayback()
+        }
+    }
+
+    private func cancelLeave() {
+        withAnimation(.easeOut(duration: 0.14)) { confirmingLeave = false }
+        leaveSelected = false
+        showControls()
+    }
+
+    /// Leave is deliberately a two-stage transition. The old system confirmation
+    /// dialog dismissed its presenting full-screen cover from inside the dialog's
+    /// action while tvOS was still unwinding focus, which could terminate the app.
+    /// Here the prompt is part of the player and the cover is dismissed on the next
+    /// main-actor turn after all player-owned work has been cancelled and progress
+    /// has been reported exactly once.
+    private func leavePlayback() {
+        guard !handledEnd else { return }
+        handledEnd = true
+        confirmingLeave = false
+        hideTask?.cancel()
+        scrubCommit?.cancel()
+        skipHideTask?.cancel()
+        loadWatchdog?.cancel()
+        target.onProgress?(model.position, model.duration)
+        Task { @MainActor in
+            await Task.yield()
             dismiss()
         }
+    }
+
+    private var leavePrompt: some View {
+        ZStack {
+            Color.black.opacity(0.58).ignoresSafeArea()
+            VStack(spacing: 20) {
+                Image(systemName: "rectangle.portrait.and.arrow.right")
+                    .font(.system(size: 36, weight: .semibold))
+                    .foregroundStyle(accent)
+                Text("Leave playback?")
+                    .font(.system(size: 34, weight: .bold))
+                Text("Your position will be saved so you can continue later.")
+                    .font(.system(size: 21))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                HStack(spacing: 16) {
+                    leaveChoice(title: "Keep Watching", icon: "play.fill", selected: !leaveSelected)
+                    leaveChoice(title: "Leave Playback", icon: "rectangle.portrait.and.arrow.right",
+                                selected: leaveSelected, destructive: true)
+                }
+                .padding(.top, 8)
+                Text("Swipe to choose  •  Press Select to confirm")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 46)
+            .padding(.vertical, 36)
+            .frame(width: 670)
+            .harborGlass(cornerRadius: 28)
+            .overlay {
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .stroke(.white.opacity(0.15), lineWidth: 1)
+            }
+        }
+    }
+
+    private func leaveChoice(title: String, icon: String, selected: Bool,
+                             destructive: Bool = false) -> some View {
+        HStack(spacing: 11) {
+            Image(systemName: icon)
+            Text(title)
+        }
+        .font(.system(size: 21, weight: .bold))
+        .foregroundStyle(selected ? .white : .white.opacity(0.68))
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 17)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(selected ? (destructive ? Color.red : accent) : Color.white.opacity(0.08))
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(selected ? Color.white.opacity(0.85) : Color.clear, lineWidth: 2)
+        }
+        .scaleEffect(selected ? 1.04 : 1)
+        .animation(.easeOut(duration: 0.12), value: selected)
     }
 
     private func timeString(_ t: Double) -> String {

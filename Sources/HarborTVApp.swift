@@ -31,7 +31,6 @@ struct HarborTVApp: App {
 
 struct RootView: View {
     @AppStorage(SubtitleStyle.Key.accent) private var accent = "green"
-    @AppStorage(SubtitleStyle.Key.background) private var background = "harbor"
     @AppStorage(SubtitleStyle.Key.interfaceStyle) private var interfaceStyle = "harbor"
     @State private var selection: HarborSection = .home
     @State private var sidebarEnabled = false
@@ -41,7 +40,7 @@ struct RootView: View {
 
     var body: some View {
         ZStack(alignment: .leading) {
-            stageColor.ignoresSafeArea()
+            HarborStageBackground()
             destination
                 .id(selection)
                 .padding(.leading, HarborSidebar.collapsedWidth)
@@ -50,9 +49,9 @@ struct RootView: View {
                 .overlay {
                     LinearGradient(
                         stops: [
-                            .init(color: Color(red: 0.055, green: 0.06, blue: 0.065), location: 0),
-                            .init(color: .black.opacity(0.58), location: 0.18),
-                            .init(color: .black.opacity(0.58), location: 1),
+                            .init(color: HarborTVDesign.canvas, location: 0),
+                            .init(color: .black.opacity(0.76), location: 0.17),
+                            .init(color: .black.opacity(0.56), location: 1),
                         ], startPoint: .leading, endPoint: .trailing
                     )
                     .ignoresSafeArea()
@@ -123,18 +122,6 @@ struct RootView: View {
         }
     }
 
-    private var stageColor: Color {
-        if interfaceStyle == "max" { return .black }
-        if interfaceStyle == "netflix" { return Color(red: 0.027, green: 0.027, blue: 0.027) }
-        switch background {
-        case "oled": return .black
-        case "system": return .black
-        // Harbor Desktop uses a neutral charcoal stage; the old blue-black tint
-        // made cards and lists look like a separate theme from the reference UI.
-        default: return Color(red: 0.045, green: 0.05, blue: 0.052)
-        }
-    }
-
     private var sidebarAccent: Color {
         switch interfaceStyle {
         case "max": return .white
@@ -193,8 +180,8 @@ private struct HarborSidebar: View {
     let interfaceStyle: String
     let onSelected: (HarborSection) -> Void
 
-    static let collapsedWidth: CGFloat = 86
-    static let expandedWidth: CGFloat = 300
+    static let collapsedWidth: CGFloat = 82
+    static let expandedWidth: CGFloat = 286
     private var expanded: Bool { focus.wrappedValue != nil }
     private var width: CGFloat { expanded ? Self.expandedWidth : Self.collapsedWidth }
 
@@ -203,12 +190,12 @@ private struct HarborSidebar: View {
             Group {
                 HStack(spacing: 18) {
                     Image(systemName: "sailboat.fill")
-                        .font(.system(size: expanded ? 31 : 34, weight: .bold))
-                        .foregroundStyle(.white)
+                        .font(.system(size: expanded ? 30 : 32, weight: .bold))
+                        .foregroundStyle(interfaceStyle == "netflix" ? HarborTVDesign.cinemaRed : .white)
                         .frame(width: 46)
                     if expanded {
                         Text("Harbor")
-                            .font(.system(size: 38, weight: .semibold, design: .serif))
+                            .font(.system(size: 36, weight: .bold, design: .serif))
                             .transition(.opacity)
                     }
                 }
@@ -221,6 +208,13 @@ private struct HarborSidebar: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(HarborSection.sidebarOrder) { section in
+                    if section == .library {
+                        Rectangle()
+                            .fill(.white.opacity(0.10))
+                            .frame(height: 1)
+                            .padding(.horizontal, expanded ? 16 : 23)
+                            .padding(.vertical, 7)
+                    }
                     Button {
                         onSelected(section)
                     } label: {
@@ -240,7 +234,10 @@ private struct HarborSidebar: View {
         .frame(width: width, alignment: .leading)
         .frame(maxHeight: .infinity, alignment: .top)
         .clipped()
-        .background((expanded ? Color(red: 0.055, green: 0.06, blue: 0.065) : .black.opacity(0.72)).ignoresSafeArea())
+        .background((expanded ? HarborTVDesign.canvas.opacity(0.995) : .black.opacity(0.62)).ignoresSafeArea())
+        .overlay(alignment: .trailing) {
+            Rectangle().fill(.white.opacity(expanded ? 0.08 : 0.045)).frame(width: 1)
+        }
         .animation(.spring(response: 0.34, dampingFraction: 0.86), value: expanded)
         .onChange(of: expanded) { _, isExpanded in
             if isExpanded && focus.wrappedValue != selection { focus.wrappedValue = selection }
@@ -277,7 +274,15 @@ private struct HarborSidebarRow: View {
         .frame(width: expanded ? width - 24 : width, height: 62, alignment: .leading)
         .background {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(expanded && highlighted ? .white.opacity(interfaceStyle == "max" ? 0.18 : 0.12) : .clear)
+                .fill(expanded && highlighted ? .white.opacity(interfaceStyle == "max" ? 0.18 : 0.13) : .clear)
         }
+        .overlay(alignment: .leading) {
+            Capsule()
+                .fill(selected ? accent : .clear)
+                .frame(width: 4, height: 30)
+                .padding(.leading, expanded ? 3 : 7)
+        }
+        .scaleEffect(isFocused ? 1.025 : 1, anchor: .leading)
+        .animation(.easeOut(duration: 0.13), value: isFocused)
     }
 }

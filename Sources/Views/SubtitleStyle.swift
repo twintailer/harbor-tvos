@@ -102,6 +102,7 @@ enum SubtitleStyle {
         static let accent = "harbor.theme.accent"
         static let background = "harbor.theme.background"
         static let interfaceStyle = "harbor.theme.interfaceStyle"
+        static let tvUXRevision = "harbor.theme.tvUXRevision"
         static let posterScale = "harbor.theme.posterScale"
         static let posterRadius = "harbor.theme.posterRadius"
         static let rowTitleScale = "harbor.theme.rowTitleScale"
@@ -444,6 +445,15 @@ enum HarborSettings {
 
     static func registerDefaults() {
         let defaults = UserDefaults.standard
+        // One-time visual migration for the television-first redesign. It is
+        // intentionally revisioned so later launches never overwrite a theme the
+        // user has selected in Settings after seeing the new cinema interface.
+        if defaults.integer(forKey: SubtitleStyle.Key.tvUXRevision) < 1 {
+            defaults.set("netflix", forKey: SubtitleStyle.Key.interfaceStyle)
+            defaults.set("oled", forKey: SubtitleStyle.Key.background)
+            defaults.set(10.0, forKey: SubtitleStyle.Key.posterRadius)
+            defaults.set(1, forKey: SubtitleStyle.Key.tvUXRevision)
+        }
         if defaults.string(forKey: SubtitleStyle.Key.episodeSort) == "oldest" {
             defaults.set("aired", forKey: SubtitleStyle.Key.episodeSort)
         }
@@ -496,7 +506,7 @@ enum HarborSettings {
             SubtitleStyle.Key.showAudioButton: true,
             SubtitleStyle.Key.showAspectButton: true,
             SubtitleStyle.Key.showAnimeButton: true,
-            SubtitleStyle.Key.interfaceStyle: "harbor",
+            SubtitleStyle.Key.interfaceStyle: "netflix",
             SubtitleStyle.Key.posterScale: 1.0,
             SubtitleStyle.Key.posterRadius: 12.0,
             SubtitleStyle.Key.rowTitleScale: 1.0,

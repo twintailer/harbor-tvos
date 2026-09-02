@@ -56,63 +56,102 @@ struct DetailView: View {
 
     var body: some View {
         ZStack {
+            HarborTVDesign.canvas.ignoresSafeArea()
             HarborArtworkImage(url: meta.background ?? meta.poster,
                                maxPixelSize: 2200)
-            .ignoresSafeArea()
-            .overlay(LinearGradient(
-                colors: [.black.opacity(0.2), .black.opacity(0.95)],
-                startPoint: .top, endPoint: .bottom))
-            .ignoresSafeArea()
+                .ignoresSafeArea()
+                .overlay(LinearGradient(
+                    stops: [
+                        .init(color: .black.opacity(0.86), location: 0),
+                        .init(color: .black.opacity(0.50), location: 0.38),
+                        .init(color: .clear, location: 0.76),
+                    ], startPoint: .leading, endPoint: .trailing))
+                .overlay(LinearGradient(
+                    stops: [
+                        .init(color: .black.opacity(0.04), location: 0),
+                        .init(color: .black.opacity(0.12), location: 0.45),
+                        .init(color: HarborTVDesign.canvas.opacity(0.98), location: 0.82),
+                        .init(color: HarborTVDesign.canvas, location: 1),
+                    ], startPoint: .top, endPoint: .bottom))
+                .ignoresSafeArea()
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    Spacer().frame(height: 420)
-                    Text(meta.name).font(.system(size: 60, weight: .bold))
-                    HStack(spacing: 18) {
-                        if let y = meta.releaseInfo { Text(y) }
-                        if let r = meta.imdbRating, !r.isEmpty { Text("★ \(r)") }
-                        if let rt = meta.runtime { Text(rt) }
-                    }
-                    .font(.system(size: 24))
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 0) {
+                    Spacer().frame(height: 270)
 
-                    HStack(spacing: 24) {
-                        Button {
-                            if let episode = playButtonEpisode {
-                                play(streamId: streamID(for: episode),
-                                     title: episodeFullTitle(episode), video: episode)
-                            } else {
-                                play(streamId: meta.id, title: meta.name)
-                            }
-                        } label: {
-                            Label(playLabelText, systemImage: "play.fill")
-                                .padding(.horizontal, 20)
+                    VStack(alignment: .leading, spacing: 17) {
+                        Text(meta.type == "movie" ? "HARBOR FILM" : (isAnime ? "HARBOR ANIME" : "HARBOR SERIES"))
+                            .font(.system(size: 15, weight: .heavy))
+                            .tracking(2.4)
+                            .foregroundStyle(HarborTVDesign.cinemaRed)
+
+                        Text(meta.name)
+                            .font(.system(size: 64, weight: .heavy))
+                            .foregroundStyle(.white)
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.72)
+
+                        HStack(spacing: 13) {
+                            if let r = meta.imdbRating, !r.isEmpty { ImdbBadge(rating: r) }
+                            if let y = meta.releaseInfo, !y.isEmpty { Text(y) }
+                            Text(meta.type == "movie" ? "MOVIE" : (isAnime ? "ANIME" : "SERIES"))
+                                .font(.system(size: 13, weight: .heavy))
+                                .padding(.horizontal, 7).padding(.vertical, 3)
+                                .overlay(RoundedRectangle(cornerRadius: 3).stroke(.white.opacity(0.42), lineWidth: 1))
+                            if let rt = meta.runtime, !rt.isEmpty { Text(rt) }
                         }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(resolving)
-                        if auth.isSignedIn {
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(HarborTVDesign.secondaryText)
+
+                        if let desc = meta.description, !desc.isEmpty {
+                            Text(desc)
+                                .font(.system(size: 22))
+                                .foregroundStyle(.white.opacity(0.80))
+                                .lineLimit(4)
+                                .lineSpacing(3)
+                                .frame(maxWidth: 850, alignment: .leading)
+                        }
+
+                        if let genres = meta.genres, !genres.isEmpty {
+                            Text(genres.prefix(4).joined(separator: "  •  "))
+                                .font(.system(size: 17, weight: .medium))
+                                .foregroundStyle(HarborTVDesign.tertiaryText)
+                        }
+
+                        HStack(spacing: 16) {
                             Button {
-                                toggleBookmark()
+                                if let episode = playButtonEpisode {
+                                    play(streamId: streamID(for: episode),
+                                         title: episodeFullTitle(episode), video: episode)
+                                } else {
+                                    play(streamId: meta.id, title: meta.name)
+                                }
                             } label: {
-                                Label(isBookmarked ? "In Library" : "Add to Library",
-                                      systemImage: isBookmarked ? "checkmark" : "plus")
+                                Label(playLabelText, systemImage: "play.fill")
                             }
-                            .buttonStyle(.bordered)
-                            .disabled(changingBookmark)
+                            .buttonStyle(HarborActionButtonStyle(tone: .primary))
+                            .disabled(resolving)
+                            if auth.isSignedIn {
+                                Button {
+                                    toggleBookmark()
+                                } label: {
+                                    Label(isBookmarked ? "In My List" : "My List",
+                                          systemImage: isBookmarked ? "checkmark" : "plus")
+                                }
+                                .buttonStyle(HarborActionButtonStyle(tone: .secondary))
+                                .disabled(changingBookmark)
+                            }
+                        }
+                        .padding(.top, 5)
+
+                        if !auth.isSignedIn {
+                            Label("Sign in under Settings › Account to load your stream add-ons.",
+                                  systemImage: "person.crop.circle.badge.exclamationmark")
+                                .font(.system(size: 18, weight: .medium))
+                                .foregroundStyle(HarborTVDesign.secondaryText)
                         }
                     }
-                    .padding(.top, 8)
-                    if !auth.isSignedIn {
-                        Text("Sign in (Account tab) to load streams from your addons.")
-                            .font(.system(size: 20)).foregroundStyle(.secondary)
-                    }
-
-                    if let desc = meta.description {
-                        Text(desc)
-                            .font(.system(size: 26))
-                            .frame(maxWidth: 1100, alignment: .leading)
-                            .padding(.top, 12)
-                    }
+                    .frame(maxWidth: 920, alignment: .leading)
 
                     if let videos = meta.videos, !videos.isEmpty {
                         SeriesEpisodes(
@@ -121,11 +160,11 @@ struct DetailView: View {
                             watched: watchedState) { v in
                                 play(streamId: streamID(for: v), title: episodeFullTitle(v), video: v)
                             }
-                            .padding(.top, 30)
+                            .padding(.top, 76)
                     }
                 }
                 .padding(.horizontal, 80)
-                .padding(.bottom, 80)
+                .padding(.bottom, 100)
             }
         }
         .fullScreenCover(item: $player, onDismiss: playerDidDismiss) { target in
@@ -429,7 +468,7 @@ struct SeriesEpisodes: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
-                Text("Episodes").font(.system(size: 34, weight: .bold))
+                HarborSectionHeading(title: "Episodes", subtitle: "\(episodesInSeason.count) available")
                 Spacer()
                 if seasons.count > 1, episodeSort != "absolute" {
                     Menu {
@@ -443,6 +482,7 @@ struct SeriesEpisodes: View {
                         }
                         .font(.system(size: 24, weight: .semibold))
                     }
+                    .buttonStyle(HarborActionButtonStyle(tone: .quiet))
                 }
                 Menu {
                     Button("Aired order") { episodeSort = "aired" }
@@ -455,6 +495,7 @@ struct SeriesEpisodes: View {
                     }
                     .font(.system(size: 22, weight: .semibold))
                 }
+                .buttonStyle(HarborActionButtonStyle(tone: .quiet))
             }
 
             // Plain VStack, NOT LazyVStack: the tvOS focus engine can only move to views
@@ -506,7 +547,10 @@ private struct EpisodeStripCard: View {
     @AppStorage(SubtitleStyle.Key.hideSpoilers) private var hideSpoilers = false
     @AppStorage(SubtitleStyle.Key.spoilerThumbnails) private var hideThumbnail = true
     @AppStorage(SubtitleStyle.Key.accent) private var accentID = "green"
-    private var accent: Color { HarborSettings.accentColor(accentID) }
+    @AppStorage(SubtitleStyle.Key.interfaceStyle) private var interfaceStyle = "netflix"
+    private var accent: Color {
+        HarborTVDesign.accent(interfaceStyle: interfaceStyle, fallback: accentID)
+    }
 
     var body: some View {
         Button(action: onPlay) {
@@ -529,7 +573,9 @@ private struct EpisodeStripCard: View {
             }
             .frame(width: 360, alignment: .leading)
         }
-        .buttonStyle(.card)
+        .buttonStyle(HarborCardFocusStyle(radius: 14,
+                                          accent: HarborTVDesign.cinemaRed,
+                                          scale: 1.045))
     }
 }
 
@@ -543,7 +589,10 @@ struct EpisodeRowTV: View {
     @AppStorage(SubtitleStyle.Key.hideSpoilers) private var hideSpoilers = false
     @AppStorage(SubtitleStyle.Key.spoilerThumbnails) private var hideThumbnail = true
     @AppStorage(SubtitleStyle.Key.accent) private var accentID = "green"
-    private var accent: Color { HarborSettings.accentColor(accentID) }
+    @AppStorage(SubtitleStyle.Key.interfaceStyle) private var interfaceStyle = "netflix"
+    private var accent: Color {
+        HarborTVDesign.accent(interfaceStyle: interfaceStyle, fallback: accentID)
+    }
 
     var body: some View {
         Button(action: onPlay) {
@@ -604,7 +653,7 @@ struct EpisodeRowTV: View {
             }
             .padding(.vertical, 10)
         }
-        .buttonStyle(.card)
+        .buttonStyle(HarborRowFocusStyle())
     }
 
     private var metaLine: String {

@@ -33,9 +33,9 @@ struct PosterCard: View {
                 .frame(width: cardWidth, height: cardWidth * 3 / 2)
                 .clipShape(RoundedRectangle(cornerRadius: posterRadius, style: .continuous))
             }
-            .buttonStyle(HarborArtworkButtonStyle(
+            .buttonStyle(HarborCardFocusStyle(
                 radius: posterRadius, accent: focusColor,
-                reduceMotion: reduceArtworkMotion))
+                scale: 1.065, reduceMotion: reduceArtworkMotion))
             .contextMenu {
                 if let onRemoveFromHistory {
                     Button(role: .destructive, action: onRemoveFromHistory) {
@@ -48,10 +48,18 @@ struct PosterCard: View {
             }
 
             Text(item.name)
-                .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(.white.opacity(0.9))
+                .font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.94))
                 .lineLimit(1)
                 .frame(width: cardWidth, alignment: .leading)
+            HStack(spacing: 7) {
+                if let year = item.releaseInfo, !year.isEmpty { Text(year) }
+                Text(item.type == "movie" ? "Movie" : (item.type == "anime" ? "Anime" : "Series"))
+            }
+            .font(.system(size: 15, weight: .medium))
+            .foregroundStyle(HarborTVDesign.tertiaryText)
+            .lineLimit(1)
+            .frame(width: cardWidth, alignment: .leading)
         }
     }
 
@@ -132,7 +140,7 @@ struct ContinueCard: View {
                             GeometryReader { geo in
                                 ZStack(alignment: .leading) {
                                     Rectangle().fill(.white.opacity(0.25))
-                                    Rectangle().fill(HarborSettings.accentColor(accent))
+                                    Rectangle().fill(focusColor)
                                         .frame(width: geo.size.width * entry.progress)
                                 }
                             }
@@ -144,9 +152,10 @@ struct ContinueCard: View {
                 .frame(width: width, height: height)
                 .clipShape(RoundedRectangle(cornerRadius: posterRadius, style: .continuous))
             }
-            .buttonStyle(HarborArtworkButtonStyle(radius: posterRadius,
-                                                   accent: focusColor,
-                                                   reduceMotion: false))
+            .buttonStyle(HarborCardFocusStyle(radius: posterRadius,
+                                               accent: focusColor,
+                                               scale: 1.06,
+                                               reduceMotion: false))
             .contextMenu {
                 if let onRemove {
                     Button(role: .destructive, action: onRemove) {
@@ -169,38 +178,5 @@ struct ContinueCard: View {
         case "netflix": return Color(red: 0.90, green: 0.035, blue: 0.075)
         default: return HarborSettings.accentColor(accent)
         }
-    }
-}
-
-/// Flat artwork focus treatment inspired by Orivio's Max/Netflix themes. It
-/// avoids tvOS' large grey `.card` platter and only lifts the artwork itself.
-private struct HarborArtworkButtonStyle: ButtonStyle {
-    let radius: CGFloat
-    let accent: Color
-    let reduceMotion: Bool
-
-    func makeBody(configuration: Configuration) -> some View {
-        HarborArtworkButtonBody(configuration: configuration, radius: radius,
-                                accent: accent, reduceMotion: reduceMotion)
-    }
-}
-
-private struct HarborArtworkButtonBody: View {
-    let configuration: ButtonStyle.Configuration
-    let radius: CGFloat
-    let accent: Color
-    let reduceMotion: Bool
-    @Environment(\.isFocused) private var focused
-
-    var body: some View {
-        configuration.label
-            .overlay {
-                RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .stroke(focused ? accent : .white.opacity(0.06),
-                            lineWidth: focused ? 3 : 1)
-            }
-            .scaleEffect(focused ? 1.055 : (configuration.isPressed ? 0.985 : 1))
-            .shadow(color: .black.opacity(focused ? 0.58 : 0), radius: 20, y: 10)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: focused)
     }
 }

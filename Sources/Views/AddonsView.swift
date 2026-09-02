@@ -14,7 +14,9 @@ struct AddonsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 28) {
                     HStack {
-                        Text("Add-ons").font(.system(size: 52, weight: .bold))
+                        HarborPageHeader(title: "Add-ons", eyebrow: "Your sources",
+                                         subtitle: "Catalogs, metadata and streams connected to Harbor",
+                                         count: auth.addons.count)
                         Spacer()
                         if auth.isSignedIn {
                             Button {
@@ -23,6 +25,7 @@ struct AddonsView: View {
                             } label: {
                                 Label(refreshing ? "Refreshing…" : "Refresh", systemImage: "arrow.clockwise")
                             }
+                            .buttonStyle(HarborActionButtonStyle(tone: .secondary))
                             .disabled(refreshing)
                         }
                     }
@@ -36,6 +39,7 @@ struct AddonsView: View {
                             } label: {
                                 Label("Install", systemImage: "plus")
                             }
+                            .buttonStyle(HarborActionButtonStyle(tone: .primary))
                             .disabled(working || addonURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         }
                         if let error {
@@ -44,13 +48,13 @@ struct AddonsView: View {
                     }
 
                     if !auth.isSignedIn {
-                        ContentUnavailableView("Sign in to load add-ons",
-                                               systemImage: "person.crop.circle",
-                                               description: Text("Use Settings › Account to sign in to Stremio."))
+                        HarborEmptyState(icon: "person.crop.circle",
+                                         title: "Sign in to load add-ons",
+                                         message: "Use Settings › Account to sign in to Stremio.")
                     } else if auth.addons.isEmpty {
-                        ContentUnavailableView("No add-ons found",
-                                               systemImage: "puzzlepiece.extension",
-                                               description: Text("Install add-ons in Stremio, then choose Refresh."))
+                        HarborEmptyState(icon: "puzzlepiece.extension",
+                                         title: "No add-ons found",
+                                         message: "Install add-ons in Stremio, then choose Refresh.")
                     } else {
                         ForEach(Array(auth.addons.enumerated()), id: \.offset) { _, addon in
                             addonRow(addon)
@@ -60,6 +64,7 @@ struct AddonsView: View {
                 .padding(.horizontal, 60)
                 .padding(.vertical, 40)
             }
+            .background(HarborStageBackground())
             .onExitCommand(perform: onRootBack)
         }
         .confirmationDialog("Remove this add-on from your Stremio account?",
@@ -113,7 +118,8 @@ struct AddonsView: View {
             }
         }
         .padding(26)
-        .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 18))
+        .background(HarborTVDesign.panel, in: RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(.white.opacity(0.08), lineWidth: 1))
     }
 
     private func installAddon() {

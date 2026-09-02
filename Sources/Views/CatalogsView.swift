@@ -11,19 +11,21 @@ struct CatalogsView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 44) {
-                    Text("Catalogs")
-                        .font(.system(size: 52, weight: .bold))
+                    HarborPageHeader(title: "Catalogs", eyebrow: "Browse",
+                                     subtitle: "Collections from your connected Stremio add-ons",
+                                     count: rows.count)
                         .padding(.horizontal, 60).padding(.top, 30)
                     if loading { ProgressView().padding(.horizontal, 60) }
                     ForEach(rows) { CatalogRowView(row: $0) }
                     if !loading && rows.isEmpty {
-                        ContentUnavailableView("No catalogs available",
-                                               systemImage: "square.grid.2x2",
-                                               description: Text("Refresh your Stremio add-ons in Settings."))
+                        HarborEmptyState(icon: "square.grid.2x2",
+                                         title: "No catalogs available",
+                                         message: "Refresh your Stremio add-ons in Settings.")
                     }
                 }
                 .padding(.bottom, 60)
             }
+            .background(HarborStageBackground())
             .onExitCommand(perform: onRootBack)
             .navigationDestination(for: MetaItem.self) { DetailView(item: $0) }
         }
@@ -58,15 +60,18 @@ struct MediaBrowseView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 28) {
-                    Text(title).font(.system(size: 52, weight: .bold))
+                    HarborPageHeader(title: title,
+                                     eyebrow: type == "anime" ? "Animation" : "Browse",
+                                     subtitle: browseSubtitle,
+                                     count: items.count)
                     if loading { ProgressView() }
                     if !loading && items.isEmpty {
-                        ContentUnavailableView("No \(title.lowercased()) catalog found",
-                                               systemImage: "film.stack",
-                                               description: Text("Install a compatible catalog add-on in Stremio."))
+                        HarborEmptyState(icon: "film.stack",
+                                         title: "No \(title.lowercased()) catalog found",
+                                         message: "Install a compatible catalog add-on in Stremio.")
                     } else {
                         LazyVGrid(columns: columns, spacing: 40) {
-                            ForEach(items) { PosterCard(item: $0, width: 200) }
+                            ForEach(items) { PosterCard(item: $0, width: 205) }
                         }
                         if hasMore {
                             HStack {
@@ -81,6 +86,7 @@ struct MediaBrowseView: View {
                 }
                 .padding(.horizontal, 60).padding(.vertical, 36)
             }
+            .background(HarborStageBackground())
             .onExitCommand(perform: onRootBack)
             .navigationDestination(for: MetaItem.self) { DetailView(item: $0) }
         }
@@ -117,6 +123,14 @@ struct MediaBrowseView: View {
 
     private var addonRevision: String {
         auth.addons.map(\.transportUrl).joined(separator: "|")
+    }
+
+    private var browseSubtitle: String {
+        switch type {
+        case "movie": return "Films selected from your preferred catalogs"
+        case "anime": return "Anime and animation, ready for the big screen"
+        default: return "Series from your connected catalogs"
+        }
     }
 
     private var fallbackSource: CatalogPageSource {

@@ -11,7 +11,7 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 44) {
+                LazyVStack(alignment: .leading, spacing: 46) {
                     if let featured {
                         HarborDesktopHero(item: featured, onSearch: onSearch)
                     } else {
@@ -29,7 +29,7 @@ struct HomeView: View {
                         CatalogRowView(row: row)
                     }
                 }
-                .padding(.bottom, 60)
+                .padding(.bottom, 84)
             }
             .onExitCommand(perform: onRootBack)
             .navigationDestination(for: MetaItem.self) { item in
@@ -63,80 +63,98 @@ private struct HarborDesktopHero: View {
         ZStack(alignment: .topLeading) {
             HarborArtworkImage(url: item.background ?? item.poster, maxPixelSize: 2200)
                 .frame(maxWidth: .infinity)
-                .frame(height: 530)
+                .frame(height: 610)
 
             LinearGradient(
                 stops: [
-                    .init(color: Color(red: 0.045, green: 0.05, blue: 0.052).opacity(0.98), location: 0),
-                    .init(color: .black.opacity(0.70), location: 0.34),
-                    .init(color: .clear, location: 0.72),
+                    .init(color: HarborTVDesign.canvas.opacity(0.99), location: 0),
+                    .init(color: .black.opacity(0.72), location: 0.35),
+                    .init(color: .black.opacity(0.16), location: 0.72),
+                    .init(color: .black.opacity(0.05), location: 1),
                 ], startPoint: .leading, endPoint: .trailing
             )
-            LinearGradient(colors: [.clear, .black.opacity(0.10), Color(red: 0.045, green: 0.05, blue: 0.052)],
+            LinearGradient(colors: [.black.opacity(0.08), .clear, HarborTVDesign.canvas],
                            startPoint: .top, endPoint: .bottom)
 
-            searchChip
-
-            VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                HStack(spacing: 9) {
+                    Rectangle()
+                        .fill(HarborTVDesign.cinemaRed)
+                        .frame(width: 4, height: 20)
+                    Text("HARBOR  /  HOME")
+                        .font(.system(size: 15, weight: .bold))
+                        .tracking(1.8)
+                        .foregroundStyle(.white.opacity(0.72))
+                }
                 Spacer()
+                searchChip
+            }
+            .padding(.horizontal, HarborTVDesign.pageInset)
+            .padding(.top, 24)
+
+            VStack(alignment: .leading, spacing: 16) {
+                Spacer()
+                Text("HARBOR SPOTLIGHT")
+                    .font(.system(size: 15, weight: .heavy))
+                    .tracking(2.4)
+                    .foregroundStyle(HarborTVDesign.cinemaRed)
                 Text(item.name)
-                    .font(.system(size: 64, weight: .heavy, design: .rounded))
+                    .font(.system(size: 68, weight: .heavy))
                     .foregroundStyle(.white)
                     .lineLimit(2)
-                    .frame(maxWidth: 680, alignment: .leading)
+                    .minimumScaleFactor(0.72)
+                    .frame(maxWidth: 720, alignment: .leading)
+
+                HStack(spacing: 12) {
+                    Text("98% Match")
+                        .foregroundStyle(HarborTVDesign.success)
+                    if let release = item.releaseInfo, !release.isEmpty { Text(release) }
+                    Text(item.type == "movie" ? "MOVIE" : (item.type == "anime" ? "ANIME" : "SERIES"))
+                        .font(.system(size: 13, weight: .heavy))
+                        .padding(.horizontal, 7).padding(.vertical, 3)
+                        .overlay(RoundedRectangle(cornerRadius: 3).stroke(.white.opacity(0.42), lineWidth: 1))
+                    if let rating = item.imdbRating, !rating.isEmpty { ImdbBadge(rating: rating) }
+                    if let runtime = item.runtime, !runtime.isEmpty { Text(runtime) }
+                }
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.72))
 
                 if let description = item.description, !description.isEmpty {
                     Text(description)
-                        .font(.system(size: 22, weight: .regular))
-                        .foregroundStyle(.white.opacity(0.76))
+                        .font(.system(size: 21, weight: .regular))
+                        .foregroundStyle(.white.opacity(0.78))
                         .lineLimit(3)
-                        .frame(maxWidth: 690, alignment: .leading)
+                        .lineSpacing(3)
+                        .frame(maxWidth: 720, alignment: .leading)
                 }
 
                 HStack(spacing: 14) {
-                    if let release = item.releaseInfo, !release.isEmpty {
-                        Text(release).foregroundStyle(.white.opacity(0.58))
+                    NavigationLink(value: item) {
+                        Label("Play", systemImage: "play.fill")
                     }
-                    if let rating = item.imdbRating, !rating.isEmpty { ImdbBadge(rating: rating) }
-                    if let runtime = item.runtime, !runtime.isEmpty {
-                        Text(runtime).foregroundStyle(.white.opacity(0.58))
+                    .buttonStyle(HarborActionButtonStyle(tone: .primary))
+                    NavigationLink(value: item) {
+                        Label("More Info", systemImage: "info.circle")
                     }
+                    .buttonStyle(HarborActionButtonStyle(tone: .secondary))
                 }
-                .font(.system(size: 18, weight: .semibold))
-
-                NavigationLink(value: item) {
-                    Label("Play", systemImage: "play.fill")
-                        .font(.system(size: 21, weight: .bold))
-                        .padding(.horizontal, 25).padding(.vertical, 13)
-                }
-                .buttonStyle(HarborHeroButtonStyle())
             }
-            .padding(.leading, 64)
-            .padding(.bottom, 38)
+            .padding(.leading, HarborTVDesign.pageInset)
+            .padding(.bottom, 58)
         }
-        .frame(height: 530)
+        .frame(height: 610)
         .clipped()
     }
 
     private var searchChip: some View {
-        HStack {
-            Spacer()
-            Button(action: onSearch) {
-                HStack(spacing: 10) {
-                    Image(systemName: "magnifyingglass")
-                    Text("Search movies, shows, people…")
-                }
-                .font(.system(size: 18, weight: .medium))
-                .foregroundStyle(.white.opacity(0.52))
-                .frame(width: 350, height: 46, alignment: .leading)
-                .padding(.horizontal, 18)
-                .background(Capsule().fill(.black.opacity(0.42)))
-                .overlay(Capsule().stroke(.white.opacity(0.08), lineWidth: 1))
+        Button(action: onSearch) {
+            HStack(spacing: 11) {
+                Image(systemName: "magnifyingglass")
+                Text("Search")
             }
-            .buttonStyle(.plain)
-            Spacer()
+            .frame(minWidth: 145)
         }
-        .padding(.top, 22)
+        .buttonStyle(HarborActionButtonStyle(tone: .quiet))
     }
 }
 
@@ -145,38 +163,14 @@ private struct HarborHeroPlaceholder: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            Color(red: 0.045, green: 0.05, blue: 0.052)
+            HarborStageBackground()
             Button(action: onSearch) {
                 Label("Search movies, shows, people…", systemImage: "magnifyingglass")
-                    .font(.system(size: 19, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.55))
-                    .padding(.horizontal, 24).frame(height: 50)
-                    .background(Capsule().fill(.white.opacity(0.055)))
             }
-            .buttonStyle(.plain)
-            .padding(.top, 24)
+            .buttonStyle(HarborActionButtonStyle(tone: .quiet))
+            .padding(.top, 70)
         }
-        .frame(height: 190)
-    }
-}
-
-private struct HarborHeroButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        HarborHeroButtonBody(configuration: configuration)
-    }
-}
-
-private struct HarborHeroButtonBody: View {
-    let configuration: ButtonStyle.Configuration
-    @Environment(\.isFocused) private var focused
-
-    var body: some View {
-        configuration.label
-            .foregroundStyle(focused ? .black : .white)
-            .background(Capsule().fill(focused ? .white : .black.opacity(0.52)))
-            .overlay(Capsule().stroke(.white.opacity(focused ? 0 : 0.24), lineWidth: 1))
-            .scaleEffect(focused ? 1.06 : 1)
-            .animation(.easeOut(duration: 0.15), value: focused)
+        .frame(height: 260)
     }
 }
 
@@ -186,8 +180,7 @@ struct ContinueRowView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Continue Watching")
-                .font(.system(size: 30, weight: .semibold))
+            HarborSectionHeading(title: "Continue Watching", subtitle: "Pick up where you left off")
                 .padding(.horizontal, 60)
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: 32) {
@@ -237,18 +230,19 @@ struct CatalogRowView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(row.title)
-                .font(.system(size: 30 * titleScale, weight: .semibold))
+            HarborSectionHeading(title: row.title,
+                                 subtitle: visibleItems.isEmpty ? nil : "\(visibleItems.count)+ titles",
+                                 scale: CGFloat(titleScale))
                 .padding(.horizontal, 60)
             ScrollView(.horizontal) {
-                LazyHStack(alignment: .top, spacing: 32) {
+                LazyHStack(alignment: .top, spacing: 26) {
                     ForEach(visibleItems) { item in
-                        PosterCard(item: item)
+                        HarborLandscapeCard(item: item)
                     }
                     if hasMore, row.source != nil {
                         ProgressView()
                             .controlSize(.large)
-                            .frame(width: 120, height: 360)
+                            .frame(width: 120, height: 235)
                             .task { await loadMore() }
                     }
                 }

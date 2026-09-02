@@ -104,6 +104,7 @@ struct PlayerView: View {
     @AppStorage(SubtitleStyle.Key.confirmLeave) private var confirmLeave = true
     @AppStorage(SubtitleStyle.Key.autoPlayNext) private var autoPlayNext = true
     @AppStorage(SubtitleStyle.Key.accent) private var accentID = "green"
+    @AppStorage(SubtitleStyle.Key.interfaceStyle) private var interfaceStyle = "netflix"
     @AppStorage(SubtitleStyle.Key.anime4KEnabled) private var anime4KEnabled = false
     @AppStorage(SubtitleStyle.Key.anime4KIndicator) private var anime4KIndicator = true
     @AppStorage(SubtitleStyle.Key.anime4KMode) private var anime4KMode = "A"
@@ -131,7 +132,9 @@ struct PlayerView: View {
     private let speeds: [Double] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
 
     private var controlsHidden: Bool { !showInfo && !showOptions }
-    private var accent: Color { HarborSettings.accentColor(accentID) }
+    private var accent: Color {
+        HarborTVDesign.accent(interfaceStyle: interfaceStyle, fallback: accentID)
+    }
     private var animeAvailable: Bool {
         let nested = Bundle.main.urls(forResourcesWithExtension: "glsl", subdirectory: "Anime4K") ?? []
         let root = Bundle.main.urls(forResourcesWithExtension: "glsl", subdirectory: nil) ?? []
@@ -523,8 +526,8 @@ struct PlayerView: View {
             let knob: CGFloat = focused ? 28 : 20
             ZStack(alignment: .leading) {
                 Capsule().fill(.white.opacity(0.32)).frame(height: barH)
-                Capsule().fill(.white.opacity(0.96)).frame(width: max(0, w * frac), height: barH)
-                Circle().fill(.white).frame(width: knob, height: knob)
+                Capsule().fill(accent).frame(width: max(0, w * frac), height: barH)
+                Circle().fill(focused ? accent : .white).frame(width: knob, height: knob)
                     .offset(x: max(0, w * frac - knob / 2))
             }
             .frame(maxHeight: .infinity, alignment: .center)

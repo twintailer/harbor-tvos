@@ -5,14 +5,17 @@ struct ProfileView: View {
 
     var body: some View {
         if auth.isSignedIn {
-            VStack(spacing: 30) {
-                Image(systemName: "person.crop.circle.fill").font(.system(size: 100))
+            VStack(spacing: 26) {
+                Image(systemName: "person.crop.circle.fill")
+                    .font(.system(size: 100))
+                    .foregroundStyle(HarborTVDesign.cinemaRed)
                 Text(auth.email ?? "Signed in").font(.system(size: 34, weight: .semibold))
                 Text("\(auth.addons.count) addons").foregroundStyle(.secondary)
                 Button("Sign out", role: .destructive) { auth.logout() }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(HarborActionButtonStyle(tone: .secondary))
             }
             .padding(80)
+            .background(HarborStageBackground())
         } else {
             LoginView()
         }
@@ -27,40 +30,51 @@ struct LoginView: View {
     @State private var busy = false
 
     var body: some View {
-        VStack(spacing: 24) {
-            Text("Harbor").font(.system(size: 60, weight: .bold))
-            Text("Sign in to Stremio")
-                .font(.system(size: 32, weight: .semibold))
-                .foregroundStyle(.secondary)
+        ZStack {
+            HarborStageBackground()
+            VStack(spacing: 24) {
+                HStack(spacing: 14) {
+                    Image(systemName: "sailboat.fill")
+                        .foregroundStyle(HarborTVDesign.cinemaRed)
+                    Text("Harbor")
+                }
+                .font(.system(size: 56, weight: .bold, design: .serif))
+                Text("Sign in to Stremio")
+                    .font(.system(size: 30, weight: .semibold))
+                    .foregroundStyle(HarborTVDesign.secondaryText)
 
-            TextField("Email", text: $email)
-                .textContentType(.emailAddress)
-                .frame(width: 700)
-            SecureField("Password", text: $password)
-                .textContentType(.password)
-                .frame(width: 700)
+                TextField("Email", text: $email)
+                    .textContentType(.emailAddress)
+                    .frame(width: 700)
+                SecureField("Password", text: $password)
+                    .textContentType(.password)
+                    .frame(width: 700)
 
-            if let error {
-                Text(error).foregroundStyle(.red).font(.system(size: 22))
+                if let error {
+                    Text(error).foregroundStyle(.red).font(.system(size: 22))
+                }
+
+                Button {
+                    Task { await signIn() }
+                } label: {
+                    Text(busy ? "Signing in…" : "Sign in")
+                        .frame(width: 260)
+                }
+                .buttonStyle(HarborActionButtonStyle(tone: .primary))
+                .disabled(busy || email.isEmpty || password.isEmpty)
+
+                Text("Your credentials go straight to Stremio's API and are not stored — only the session token is kept.")
+                    .font(.system(size: 18))
+                    .foregroundStyle(HarborTVDesign.tertiaryText)
+                    .multilineTextAlignment(.center)
+                    .frame(width: 760)
+                    .padding(.top, 10)
             }
-
-            Button {
-                Task { await signIn() }
-            } label: {
-                Text(busy ? "Signing in…" : "Sign in")
-                    .frame(width: 300)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(busy || email.isEmpty || password.isEmpty)
-
-            Text("Your credentials go straight to Stremio's API and are not stored — only the session token is kept.")
-                .font(.system(size: 20))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(width: 800)
-                .padding(.top, 12)
+            .padding(64)
+            .background(HarborTVDesign.panel,
+                        in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 28).stroke(.white.opacity(0.08), lineWidth: 1))
         }
-        .padding(80)
     }
 
     private func signIn() async {

@@ -19,16 +19,16 @@ struct DiscoverView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 28) {
-                    Text("Discover").font(.system(size: 52, weight: .bold))
+                    HarborPageHeader(title: "Discover", eyebrow: "Explore",
+                                     subtitle: "Find something new by format and genre",
+                                     count: items.count)
                         .padding(.horizontal, 60).padding(.top, 30)
 
                     HStack(spacing: 16) {
-                        Picker("Type", selection: $type) {
-                            Text("Movies").tag("movie")
-                            Text("Series").tag("series")
-                        }
-                        .pickerStyle(.segmented)
-                        .frame(width: 400)
+                        Button("Movies") { type = "movie" }
+                            .buttonStyle(HarborFilterPillStyle(selected: type == "movie"))
+                        Button("Series") { type = "series" }
+                            .buttonStyle(HarborFilterPillStyle(selected: type == "series"))
                     }
                     .padding(.horizontal, 60)
 
@@ -36,8 +36,7 @@ struct DiscoverView: View {
                         HStack(spacing: 16) {
                             ForEach(genres, id: \.self) { g in
                                 Button(g.isEmpty ? "All" : g) { genre = g }
-                                    .buttonStyle(.bordered)
-                                    .tint(genre == g ? .white : .gray)
+                                    .buttonStyle(HarborFilterPillStyle(selected: genre == g))
                             }
                         }
                         .padding(.horizontal, 60)
@@ -47,10 +46,16 @@ struct DiscoverView: View {
 
                     LazyVGrid(columns: columns, spacing: 40) {
                         ForEach(items) { item in
-                            PosterCard(item: item, width: 200)
+                            PosterCard(item: item, width: 205)
                         }
                     }
                     .padding(.horizontal, 60)
+
+                    if !loading && items.isEmpty {
+                        HarborEmptyState(icon: "safari",
+                                         title: "Nothing matched this filter",
+                                         message: "Try a different genre or switch between movies and series.")
+                    }
 
                     if hasMore {
                         HStack { Spacer(); ProgressView().controlSize(.large); Spacer() }
@@ -60,6 +65,7 @@ struct DiscoverView: View {
                 }
                 .padding(.bottom, 60)
             }
+            .background(HarborStageBackground())
             .onExitCommand(perform: onRootBack)
             .navigationDestination(for: MetaItem.self) { DetailView(item: $0) }
         }

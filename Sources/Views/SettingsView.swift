@@ -86,15 +86,25 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
+            .scrollContentBackground(.hidden)
+            .background(HarborStageBackground())
             .onExitCommand(perform: onRootBack)
         }
     }
 }
 
 private func settingsRow(_ label: String, icon: String) -> some View {
-    Label(label, systemImage: icon)
-        .font(.system(size: 28))
-        .padding(.vertical, 8)
+    HStack(spacing: 18) {
+        Image(systemName: icon)
+            .font(.system(size: 23, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 44, height: 44)
+            .background(RoundedRectangle(cornerRadius: 12).fill(.white.opacity(0.09)))
+        Text(label)
+            .font(.system(size: 26, weight: .semibold))
+        Spacer(minLength: 0)
+    }
+    .padding(.vertical, 5)
 }
 
 private struct SettingsHint: View {

@@ -41,7 +41,9 @@ struct LibraryView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 26) {
                     HStack {
-                        Text("Library").font(.system(size: 52, weight: .bold))
+                        HarborPageHeader(title: "My Library", eyebrow: "Saved for you",
+                                         subtitle: "Your watchlist and viewing history",
+                                         count: items.count)
                         Spacer()
                         if auth.isSignedIn {
                             Button {
@@ -50,43 +52,47 @@ struct LibraryView: View {
                             } label: {
                                 Label("Refresh", systemImage: "arrow.clockwise")
                             }
+                            .buttonStyle(HarborActionButtonStyle(tone: .secondary))
                             .disabled(loading)
                         }
                     }
 
-                    Picker("Section", selection: $scope) {
-                        Text("Watchlist").tag("watchlist")
-                        Text("History").tag("history")
-                        Text("All").tag("all")
+                    HStack(spacing: 14) {
+                        Button("Watchlist") { scope = "watchlist" }
+                            .buttonStyle(HarborFilterPillStyle(selected: scope == "watchlist"))
+                        Button("History") { scope = "history" }
+                            .buttonStyle(HarborFilterPillStyle(selected: scope == "history"))
+                        Button("All") { scope = "all" }
+                            .buttonStyle(HarborFilterPillStyle(selected: scope == "all"))
                     }
-                    .pickerStyle(.segmented)
-                    .frame(width: 660)
 
-                    Picker("Type", selection: $type) {
-                        Text("All").tag("all")
-                        Text("Movies").tag("movie")
-                        Text("Series").tag("series")
-                        Text("Anime").tag("anime")
+                    HStack(spacing: 14) {
+                        Button("All titles") { type = "all" }
+                            .buttonStyle(HarborFilterPillStyle(selected: type == "all"))
+                        Button("Movies") { type = "movie" }
+                            .buttonStyle(HarborFilterPillStyle(selected: type == "movie"))
+                        Button("Series") { type = "series" }
+                            .buttonStyle(HarborFilterPillStyle(selected: type == "series"))
+                        Button("Anime") { type = "anime" }
+                            .buttonStyle(HarborFilterPillStyle(selected: type == "anime"))
                     }
-                    .pickerStyle(.segmented)
-                    .frame(width: 660)
 
                     if !auth.isSignedIn {
-                        ContentUnavailableView("Sign in to load your library",
-                                               systemImage: "person.crop.circle",
-                                               description: Text("Use Settings › Account to sign in."))
+                        HarborEmptyState(icon: "person.crop.circle",
+                                         title: "Sign in to load your library",
+                                         message: "Use Settings › Account to sign in.")
                     } else if loading && auth.libraryItems.isEmpty {
                         ProgressView().controlSize(.large).frame(maxWidth: .infinity)
                     } else if items.isEmpty {
-                        ContentUnavailableView("Nothing here yet",
-                                               systemImage: "books.vertical",
-                                               description: Text(scope == "history" ? "Finished and in-progress titles appear here." : "Save titles in Stremio and they will sync here."))
+                        HarborEmptyState(icon: "books.vertical",
+                                         title: "Nothing here yet",
+                                         message: scope == "history" ? "Finished and in-progress titles appear here." : "Save titles in Stremio and they will sync here.")
                     } else {
                         LazyVGrid(columns: columns, spacing: 40) {
                             ForEach(items, id: \._id) { item in
                                 PosterCard(
                                     item: item.asMeta,
-                                    width: 200,
+                                    width: 205,
                                     onRemoveFromHistory: scope == "history" ? {
                                         Task { await auth.removeFromHistory(item._id) }
                                     } : nil)
@@ -97,6 +103,7 @@ struct LibraryView: View {
                 .padding(.horizontal, 60)
                 .padding(.vertical, 36)
             }
+            .background(HarborStageBackground())
             .onExitCommand(perform: onRootBack)
             .navigationDestination(for: MetaItem.self) { DetailView(item: $0) }
         }

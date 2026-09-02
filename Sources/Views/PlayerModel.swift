@@ -29,6 +29,9 @@ final class PlayerModel: ObservableObject {
     @Published var duration: Double = 0
     @Published var paused: Bool = false
     @Published var ready: Bool = false
+    /// True only after the decoder clock is actually advancing. `ready` may be
+    /// reached while an engine is still stuck in its opening/buffering state.
+    @Published var playbackStarted: Bool = false
     @Published var ended: Bool = false
     @Published var anime4KActive: Bool = false
     /// Last mpv warn/error log lines, shown in the in-player Debug panel so playback
@@ -36,6 +39,17 @@ final class PlayerModel: ObservableObject {
     @Published var logLines: [String] = []
 
     weak var controller: (any HarborPlayerController)?
+
+    /// Returns true only when `candidate` still owns the shared session. During
+    /// a live engine swap SwiftUI may dismantle the old view after the new view
+    /// has already installed its controller; the old backend must not then clear
+    /// the new controller or deactivate its audio session.
+    func releaseController(_ candidate: any HarborPlayerController) -> Bool {
+        guard let current = controller,
+              ObjectIdentifier(current) == ObjectIdentifier(candidate) else { return false }
+        controller = nil
+        return true
+    }
 
     func togglePause() { controller?.togglePause() }
     func seekRelative(_ delta: Double) { controller?.seekRelative(delta) }

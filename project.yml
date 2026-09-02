@@ -8,22 +8,20 @@ settings:
     DEVELOPMENT_TEAM: ""
     SWIFT_VERSION: "5.0"
 packages:
-  # KSPlayer and Harbor's direct libmpv backend deliberately share one pinned
-  # FFmpegKit graph. Linking MPVKit as well would duplicate the Libav* modules,
-  # waste memory and fail SwiftPM's package-identity checks.
-  FFmpegKit:
-    url: https://github.com/kingslay/FFmpegKit.git
-    exactVersion: 6.1.4
+  # MPVKit contains Harbor's tested tvOS MoltenVK render context. Mainline
+  # libmpv builds cannot attach gpu-next to our CAMetalLayer on Apple TV.
+  MPVKit:
+    url: https://github.com/mpvkit/MPVKit
+    exactVersion: 1.0.0
   # Binary VLCKit package with a native tvOS slice. This is the same fallback
   # engine used by the supplied Orivio Apple TV reference project.
   VLCKit:
     url: https://github.com/tylerjonesio/vlckit-spm
     from: 3.6.0
-  # Third selectable playback engine. Pin the tested revision so FFmpeg/Metal
-  # behavior cannot change underneath a release build.
+  # Prepared by scripts/prepare-ksplayer-lite.py. This is real KSPlayer using
+  # KSAVPlayer, without its conflicting optional FFmpeg fallback.
   KSPlayer:
-    url: https://github.com/kingslay/KSPlayer
-    revision: af2e26f68b5bf726463850fe19c23c08a0d56577
+    path: Vendor/KSPlayerLite
 targets:
   HarborTV:
     type: application
@@ -35,8 +33,8 @@ targets:
         type: folder
         buildPhase: resources
     dependencies:
-      - package: FFmpegKit
-        product: libmpv
+      - package: MPVKit
+        product: MPVKit-GPL
       - package: VLCKit
         product: VLCKitSPM
       - package: KSPlayer
@@ -45,8 +43,8 @@ targets:
       path: Info.plist
       properties:
         CFBundleDisplayName: Harbor
-        CFBundleShortVersionString: "0.3.7"
-        CFBundleVersion: "12"
+        CFBundleShortVersionString: "0.3.8"
+        CFBundleVersion: "13"
         UIRequiredDeviceCapabilities: [arm64]
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true

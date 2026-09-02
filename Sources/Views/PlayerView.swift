@@ -63,6 +63,9 @@ struct PlayerView: View {
     @State private var sessionEngine = ""
     @State private var engineStartAt = 0.0
     @State private var engineGeneration = 0
+    @State private var loadWatchdog: Task<Void, Never>?
+    @State private var attemptedEngines = Set<String>()
+    @State private var fallbackNotice: String?
 
     // Scrub-to-seek
     @State private var scrubbing = false
@@ -143,10 +146,13 @@ struct PlayerView: View {
         target.isAnime && (animeActive || (sessionEngine.isEmpty && shouldStartAnime4K))
     }
     private var activeEngine: String {
+        // A concrete session choice wins after startup, including an automatic
+        // recovery choice. This prevents a global subtitle preference from
+        // forcing a known-failed decoder again on the next SwiftUI render.
+        if !sessionEngine.isEmpty { return sessionEngine }
         // "Use my style" must be deterministic even for ASS/SSA, and Anime4K
         // needs mpv's GLSL path. Both therefore override any engine preference.
         if subAssOverride == "force" || (target.isAnime && animeActive) { return "mpv" }
-        if !sessionEngine.isEmpty { return sessionEngine }
         if shouldStartAnime4K { return "mpv" }
         switch playerEngine {
         case "mpv", "vlc", "ksplayer": return playerEngine
@@ -189,6 +195,16 @@ struct PlayerView: View {
                 ProgressView().controlSize(.large).tint(accent)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            if let fallbackNotice {
+                VStack {
+                    Text(fallbackNotice)
+                        .font(.system(size: 22, weight: .semibold))
+                        .padding(.horizontal, 22).padding(.vertical, 13)
+                        .background(.ultraThinMaterial, in: Capsule())
+                    Spacer()
+                }
+                .padding(.top, 48)
+            }
             if showInfo { controlBar }
             if showOptions { optionsPanel }
             if let segment = activeSkip, skipButtonVisible, showSkipButton, !showOptions {
@@ -218,6 +234,16 @@ struct PlayerView: View {
                 loadIntroSkipIfNeeded()
             }
         }
+        .onReceive(model.$playbackStarted) { started in
+            guard started else { return }
+            loadWatchdog?.cancel()
+            if fallbackNotice != nil {
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    if model.playbackStarted { fallbackNotice = nil }
+                }
+            }
+        }
         .onReceive(model.$position) { position in
             maybeAutoSelectTracks()
             monitorAudioOutput()
@@ -239,11 +265,15 @@ struct PlayerView: View {
         .onAppear {
             showInfo = true; selected = .play; scheduleHide()
             animeActive = shouldStartAnime4K
-            sessionEngine = activeEngine
+            let initialEngine = activeEngine
+            sessionEngine = initialEngine
+            attemptedEngines = [initialEngine]
+            scheduleLoadWatchdog(for: initialEngine, generation: engineGeneration)
             UIApplication.shared.isIdleTimerDisabled = true
         }
         .onDisappear {
             hideTask?.cancel(); scrubCommit?.cancel(); skipHideTask?.cancel()
+            loadWatchdog?.cancel()
             if !handledEnd { target.onProgress?(model.position, model.duration) }
             UIApplication.shared.isIdleTimerDisabled = false
         }
@@ -745,7 +775,7 @@ struct PlayerView: View {
             } else {
                 rows.append(OptionRow(label: "VLC", detail: "Fast default · broad compatibility",
                                       isSelected: activeEngine == "vlc") { switchEngine(to: "vlc") })
-                rows.append(OptionRow(label: "KSPlayer", detail: "FFmpeg + Metal fallback",
+                rows.append(OptionRow(label: "KSPlayer", detail: "Fast native AVFoundation path",
                                       isSelected: activeEngine == "ksplayer") { switchEngine(to: "ksplayer") })
             }
             rows.append(OptionRow(label: "Default for future videos", detail: defaultEngineDisplayName,
@@ -1135,21 +1165,24 @@ struct PlayerView: View {
     /// Rebuild only the decoder surface and keep Harbor's chrome/navigation alive.
     /// This makes an engine change behave like a quality switch rather than closing
     /// the player or losing the current episode position.
-    private func switchEngine(to engine: String) {
+    private func switchEngine(to engine: String, automaticFallback: Bool = false) {
         guard ["mpv", "vlc", "ksplayer"].contains(engine) else { return }
-        if engine != "mpv", subAssOverride == "force" || (target.isAnime && animeActive) {
+        if !automaticFallback, engine != "mpv",
+           subAssOverride == "force" || (target.isAnime && animeActive) {
             return
         }
-        guard activeEngine != engine else {
+        if activeEngine == engine, model.playbackStarted {
             applySubtitleStyleSoon()
             return
         }
 
+        loadWatchdog?.cancel()
         let position = scrubbing ? scrubTarget : model.position
         commitScrubIfNeeded()
         engineStartAt = max(0, position)
         model.controller = nil
         model.ready = false
+        model.playbackStarted = false
         model.ended = false
         model.paused = false
         model.anime4KActive = false
@@ -1167,8 +1200,43 @@ struct PlayerView: View {
         autoTrackAttempts = 0
         lastTrackRefresh = .distantPast
         readyAt = .distantFuture
+        if automaticFallback {
+            attemptedEngines.insert(engine)
+        } else {
+            attemptedEngines = [engine]
+            fallbackNotice = nil
+        }
         sessionEngine = engine
         engineGeneration += 1
+        scheduleLoadWatchdog(for: engine, generation: engineGeneration)
+    }
+
+    /// Do not leave the user behind an endless spinner when a stream/container
+    /// is rejected by one backend. The order prefers VLC for compatibility and
+    /// MPV for advanced formats; KSPlayer is the low-overhead native last path.
+    private func scheduleLoadWatchdog(for engine: String, generation: Int) {
+        loadWatchdog?.cancel()
+        loadWatchdog = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 18_000_000_000)
+            guard !Task.isCancelled, !model.playbackStarted,
+                  engineGeneration == generation, activeEngine == engine else { return }
+            fallbackFromStalledEngine(engine)
+        }
+    }
+
+    private func fallbackFromStalledEngine(_ failedEngine: String) {
+        let order: [String]
+        switch failedEngine {
+        case "vlc": order = ["mpv", "ksplayer"]
+        case "ksplayer": order = ["vlc", "mpv"]
+        default: order = ["vlc", "ksplayer"]
+        }
+        guard let next = order.first(where: { !attemptedEngines.contains($0) }) else {
+            fallbackNotice = "No playback engine could open this stream"
+            return
+        }
+        fallbackNotice = "\(engineDisplayName(failedEngine)) did not respond · trying \(engineDisplayName(next))"
+        switchEngine(to: next, automaticFallback: true)
     }
 
     private func engineDisplayName(_ engine: String) -> String {

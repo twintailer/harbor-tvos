@@ -3,8 +3,9 @@ import KSPlayer
 import SwiftUI
 import UIKit
 
-/// KSPlayer's FFmpeg/Metal engine behind Harbor's own tvOS chrome. Its built-in
-/// controls are hidden so one remote-navigation model drives every engine.
+/// KSPlayer's lightweight KSAVPlayer engine behind Harbor's own tvOS chrome.
+/// Its optional FFmpeg fallback is deliberately excluded because Harbor's
+/// Anime4K-capable MPVKit already owns that native codec namespace.
 struct KSPlayerEngineView: UIViewControllerRepresentable {
     let url: URL
     let model: PlayerModel
@@ -73,7 +74,7 @@ final class KSPlayerViewController: UIViewController, HarborPlayerController,
         let options = KSOptions()
         options.registerRemoteControll = false
         options.hardwareDecode = true
-        options.isSecondOpen = true
+        options.isSecondOpen = false
         options.isAccurateSeek = false
         options.preferredForwardBufferDuration = defaults.bool(
             forKey: SubtitleStyle.Key.mpvBufferBoost) ? 5 : 2.5
@@ -97,8 +98,13 @@ final class KSPlayerViewController: UIViewController, HarborPlayerController,
     func playerController(state: KSPlayerState) {
         guard !shuttingDown, let model else { return }
         switch state {
-        case .readyToPlay, .bufferFinished:
+        case .readyToPlay:
             model.ready = true
+            model.paused = false
+            applyInitialSeekIfNeeded()
+        case .bufferFinished:
+            model.ready = true
+            model.playbackStarted = true
             model.paused = false
             applyInitialSeekIfNeeded()
         case .buffering, .preparing:
@@ -122,6 +128,9 @@ final class KSPlayerViewController: UIViewController, HarborPlayerController,
         if currentTime.isFinite, currentTime >= 0,
            abs(model.position - currentTime) > 0.12 {
             model.position = currentTime
+        }
+        if currentTime.isFinite, currentTime > max(0.05, startAt + 0.05) {
+            model.playbackStarted = true
         }
         if totalTime.isFinite, totalTime > 0,
            abs(model.duration - totalTime) > 0.2 {
@@ -254,9 +263,10 @@ final class KSPlayerViewController: UIViewController, HarborPlayerController,
         playerView.delegate = nil
         playerView.pause()
         playerView.playerLayer?.stop()
-        model?.controller = nil
-        try? AVAudioSession.sharedInstance().setActive(
-            false, options: .notifyOthersOnDeactivation)
+        if model?.releaseController(self) == true {
+            try? AVAudioSession.sharedInstance().setActive(
+                false, options: .notifyOthersOnDeactivation)
+        }
     }
 
     private func selectTrack(_ id: Int, mediaType: AVMediaType) {

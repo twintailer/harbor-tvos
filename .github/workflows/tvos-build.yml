@@ -42,6 +42,9 @@ jobs:
         shell: bash
         run: bash scripts/fetch-anime4k.sh
 
+      - name: Prepare conflict-free KSPlayer backend
+        run: python3 scripts/prepare-ksplayer-lite.py
+
       - name: Generate Xcode project
         run: xcodegen generate
 
@@ -67,7 +70,7 @@ jobs:
           test -n "$APP"
           mkdir -p Payload dist
           cp -R "$APP" Payload/
-          zip -r -q "dist/Harbor_tvOS_0.3.7_unsigned.ipa" Payload
+          zip -r -q "dist/Harbor_tvOS_0.3.8_unsigned.ipa" Payload
           ls -la dist
 
       - name: Upload IPA artifact

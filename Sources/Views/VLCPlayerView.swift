@@ -80,6 +80,7 @@ final class VLCViewController: UIViewController, HarborPlayerController {
             guard let self, !self.shuttingDown, let model = self.model else { return }
             model.paused = !playing && !buffering
             if playing || buffering { model.ready = true }
+            if playing { model.playbackStarted = true }
             if ended { model.ended = true }
             if errored {
                 model.logLines.append("[vlc] Playback error")
@@ -162,8 +163,9 @@ final class VLCViewController: UIViewController, HarborPlayerController {
         engine.onState = nil
         engine.onTime = nil
         engine.stop()
-        model?.controller = nil
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        if model?.releaseController(self) == true {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
     }
 
     private func activateAudioSession() {

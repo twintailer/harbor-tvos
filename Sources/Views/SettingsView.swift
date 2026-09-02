@@ -436,7 +436,7 @@ private struct PlayerPanel: View {
                     Text("Auto · VLC, MPV when required").tag("auto")
                     Text("MPV · best features").tag("mpv")
                     Text("VLC · fast default").tag("vlc")
-                    Text("KSPlayer · FFmpeg + Metal").tag("ksplayer")
+                    Text("KSPlayer · native AVFoundation").tag("ksplayer")
                 }
                 LabeledContent("Active on next video", value: engineLabel)
                 LabeledContent("Hardware video decode", value: hwdec == "off" ? "Software" : "VideoToolbox")
@@ -505,8 +505,8 @@ private struct PlayerPanel: View {
     private var engineLabel: String {
         switch playerEngine {
         case "vlc": return "VLC · TVVLCKit"
-        case "mpv": return "MPV · shared FFmpegKit"
-        case "ksplayer": return "KSPlayer · FFmpeg/Metal"
+        case "mpv": return "MPV · MPVKit"
+        case "ksplayer": return "KSPlayer · native AVFoundation"
         default: return "Auto · VLC"
         }
     }
@@ -516,7 +516,7 @@ private struct PlayerPanel: View {
         case "mpv":
             return "MPV provides Anime4K, deterministic ASS styling, chapters and Harbor's full tuning controls."
         case "ksplayer":
-            return "KSPlayer uses VideoToolbox with an FFmpeg/Metal fallback for formats that need a different decoder path."
+            return "KSPlayer uses its lightweight KSAVPlayer/VideoToolbox path for Apple-native streams. Harbor falls back automatically when the container is unsupported."
         case "vlc":
             return "VLC is the lean default for normal playback. Anime4K and ‘Use my style’ automatically switch the current video to MPV."
         default:

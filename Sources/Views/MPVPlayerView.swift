@@ -1,5 +1,5 @@
 import SwiftUI
-import libmpv
+import Libmpv
 import AVFoundation
 import os
 
@@ -191,7 +191,7 @@ final class MPVViewController: UIViewController, HarborPlayerController {
         default: setOpt("hwdec", "videotoolbox")
         }
         setOpt("video-rotate", "no")
-        // The shared FFmpegKit/libmpv build enables AVSampleBufferAudioRenderer on tvOS.
+        // MPVKit enables mpv's AVSampleBufferAudioRenderer output on tvOS.
         // Prefer it because AudioUnit cannot query the channel layout of some tvOS 26
         // HDMI routes (notably the 32-channel route exposed by Apple TV 4K), which
         // leaves `current-ao` empty and produces no sound. Keep AudioUnit as a fallback
@@ -299,11 +299,13 @@ final class MPVViewController: UIViewController, HarborPlayerController {
         let pos = getDouble("time-pos")
         let dur = getDouble("duration")
         let paused = getFlag("pause")
+        let started = pos.isFinite && pos > max(0.05, startAt + 0.05)
         DispatchQueue.main.async { [weak self] in
             guard let self, let m = self.model else { return }
             if pos.isFinite, abs(m.position - pos) > 0.08 { m.position = pos }
             if dur.isFinite, dur > 0, abs(m.duration - dur) > 0.2 { m.duration = dur }
             if dur.isFinite, dur > 0, !m.ready { m.ready = true }
+            if started { m.playbackStarted = true }
             if m.paused != paused { m.paused = paused }
         }
     }
@@ -588,7 +590,14 @@ final class MPVViewController: UIViewController, HarborPlayerController {
     func shutdown() {
         poll?.cancel(); poll = nil
         model?.anime4KActive = false
-        guard let ctx = mpv else { return }
+        let deactivateAudio = model?.releaseController(self) == true
+        guard let ctx = mpv else {
+            if deactivateAudio {
+                try? AVAudioSession.sharedInstance().setActive(
+                    false, options: .notifyOthersOnDeactivation)
+            }
+            return
+        }
         // Clear the wakeup callback FIRST so it can't fire into a deallocated controller,
         // then wind the core down now (quit is thread-safe) and destroy off-main.
         mpv_set_wakeup_callback(ctx, nil, nil)
@@ -596,7 +605,9 @@ final class MPVViewController: UIViewController, HarborPlayerController {
         mpv = nil
         mpvQueue.async {
             mpv_terminate_destroy(ctx)
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            if deactivateAudio {
+                try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            }
         }
     }
 }

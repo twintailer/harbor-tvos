@@ -184,6 +184,12 @@ struct HarborArtworkImage: View {
             }
         }
         .clipped()
+        .onDisappear {
+            // Lazy stacks may retain their row's State long after it scrolls away.
+            // Let the bounded shared cache, not every visited card, own that image.
+            image = nil
+            loadedKey = nil
+        }
         .task(id: requestKey) {
             guard loadedKey != requestKey else { return }
             loadedKey = nil

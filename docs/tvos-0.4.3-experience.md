@@ -31,8 +31,9 @@
 - Artwork has a four-operation download/decode budget and consumer-aware
   cancellation. Offscreen requests stop when no visible consumer needs them.
   ImageIO decodes run off the cache actor, so cache hits/cancellation stay responsive.
-- Already loaded artwork survives task reappearance. Decoded images remain bounded
-  to 64 MiB; cache generations prevent old requests refilling a purged cache.
+- Cached artwork reappears without another decode. Offscreen card state releases
+  its image instead of retaining every visited poster forever. The shared cache
+  remains bounded to 64 MiB; generations prevent requests refilling a purged cache.
 - Add-on catalog/search fan-out is bounded to four requests, preserving provider
   order. Catalog pages have a 60-second, 32-page/3,000-title bounded memory cache.
   Cancelled searches no longer continue into fallback providers.

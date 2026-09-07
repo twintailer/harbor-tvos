@@ -64,9 +64,16 @@ jobs:
 
       - name: Resolve Swift packages
         run: |
-          xcodebuild -project Harbor.xcodeproj -scheme HarborTV \
-            -clonedSourcePackagesDirPath spm \
-            -resolvePackageDependencies
+          # GitHub release binaries occasionally return HTTP 504. Retry using
+          # the same package cache instead of repeating the entire build job.
+          for attempt in 1 2 3; do
+            if xcodebuild -project Harbor.xcodeproj -scheme HarborTV \
+              -clonedSourcePackagesDirPath spm -resolvePackageDependencies; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            sleep 5
+          done
 
       - name: Build (unsigned, appletvos)
         run: |

@@ -13,10 +13,41 @@ enum HarborTVDesign {
     static let secondaryText = Color.white.opacity(0.68)
     static let tertiaryText = Color.white.opacity(0.56)
     static let pageInset: CGFloat = 58
-    static let cardRadius: CGFloat = 10
+    static let cardRadius: CGFloat = 14
 
     static func accent(interfaceStyle: String, fallback: String) -> Color {
         interfaceStyle == "netflix" ? cinemaRed : HarborSettings.accentColor(fallback)
+    }
+}
+
+/// Reserve live glass for the small interactive surfaces. Artwork rails deliberately
+/// use ordinary compositing, so dozens of posters do not each need a blur pass.
+extension View {
+    func harborGlass(cornerRadius: CGFloat = 28, tint: Color = .clear) -> some View {
+        modifier(HarborGlassSurface(cornerRadius: cornerRadius, tint: tint))
+    }
+}
+
+private struct HarborGlassSurface: ViewModifier {
+    let cornerRadius: CGFloat
+    let tint: Color
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    @ViewBuilder func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        if reduceTransparency {
+            content.background(HarborTVDesign.elevated, in: shape)
+                .background(tint, in: shape)
+                .overlay(shape.strokeBorder(.white.opacity(0.18), lineWidth: 1))
+        } else if #available(tvOS 26.0, *) {
+            content.glassEffect(.regular.tint(tint), in: shape)
+        } else {
+            content.background(.ultraThinMaterial, in: shape)
+                .background(tint, in: shape)
+                .overlay(shape.strokeBorder(
+                    LinearGradient(colors: [.white.opacity(0.34), .white.opacity(0.08)],
+                                   startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1))
+        }
     }
 }
 
@@ -139,11 +170,12 @@ private struct HarborActionButtonBody: View {
             .foregroundStyle(foreground)
             .padding(.horizontal, 25)
             .frame(minHeight: 54)
-            .background(Capsule().fill(fill))
-            .overlay(Capsule().stroke(.white.opacity(focused ? 0.95 : 0.18), lineWidth: focused ? 3 : 1))
+            .background(Capsule().fill(focused || tone == .primary ? fill : .clear))
+            .harborGlass(cornerRadius: 100, tint: focused || tone == .primary ? .white.opacity(0.65) : .black.opacity(0.18))
+            .overlay(Capsule().strokeBorder(.white.opacity(focused ? 0.95 : 0.06), lineWidth: focused ? 2 : 1))
             .opacity(enabled ? 1 : 0.45)
-            .scaleEffect(reduceMotion ? 1 : (focused ? 1.045 : (configuration.isPressed ? 0.98 : 1)))
-            .shadow(color: .black.opacity(focused ? 0.44 : 0), radius: 14, y: 6)
+            .scaleEffect(reduceMotion ? 1 : (focused ? 1.025 : (configuration.isPressed ? 0.98 : 1)))
+            .shadow(color: .black.opacity(focused ? 0.32 : 0), radius: 8, y: 4)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: focused)
     }
 }
@@ -160,6 +192,7 @@ private struct HarborFilterPillBody: View {
     let configuration: ButtonStyle.Configuration
     let selected: Bool
     @Environment(\.isFocused) private var focused
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         configuration.label
@@ -169,8 +202,8 @@ private struct HarborFilterPillBody: View {
             .frame(height: 48)
             .background(Capsule().fill(focused ? .white : (selected ? HarborTVDesign.cinemaRed : .white.opacity(0.075))))
             .overlay(Capsule().stroke(.white.opacity(focused ? 1 : 0.10), lineWidth: focused ? 2 : 1))
-            .scaleEffect(focused ? 1.07 : (configuration.isPressed ? 0.98 : 1))
-            .animation(.easeOut(duration: 0.13), value: focused)
+            .scaleEffect(reduceMotion ? 1 : (focused ? 1.025 : (configuration.isPressed ? 0.98 : 1)))
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.13), value: focused)
     }
 }
 
@@ -227,16 +260,9 @@ private struct HarborCardFocusBody: View {
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
                     .stroke(focused ? .white : .white.opacity(0.07), lineWidth: focused ? 3 : 1)
             }
-            .overlay(alignment: .bottom) {
-                if focused {
-                    Capsule()
-                        .fill(accent)
-                        .frame(height: 5)
-                        .padding(.horizontal, 6)
-                }
-            }
-            .scaleEffect(reduceMotion || systemReduceMotion ? 1 : (focused ? min(scale, 1.045) : (configuration.isPressed ? 0.985 : 1)))
-            .shadow(color: .black.opacity(focused ? 0.52 : 0), radius: 16, y: 8)
+            // White focus is distinct from the playback-progress strip.
+            .scaleEffect(reduceMotion || systemReduceMotion ? 1 : (focused ? min(scale, 1.025) : (configuration.isPressed ? 0.985 : 1)))
+            .shadow(color: .black.opacity(focused ? 0.40 : 0), radius: 8, y: 4)
             .zIndex(focused ? 5 : 0)
             .animation(reduceMotion || systemReduceMotion ? nil : .easeOut(duration: 0.15), value: focused)
     }

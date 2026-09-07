@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 /// Runs on the standard macOS runner without simulator/framework downloads.
 /// Tests the production gates AND PlayerModel with a controllable decoder.
@@ -63,6 +64,38 @@ struct PlaybackLifecycleTests {
                "Removed controls fall back to Play")
 
         let model = PlayerModel()
+        var chromeInvalidations = 0
+        var clockTicks = 0
+        let chromeObserver = model.objectWillChange.sink { _ in chromeInvalidations += 1 }
+        let clockObserver = model.clock.$position.dropFirst().sink { _ in clockTicks += 1 }
+        model.duration = 120
+        for tick in 1...240 { model.position = Double(tick) / 4 }
+        expect(clockTicks == 240, "Timeline receives every quarter-second playback tick")
+        expect(chromeInvalidations == 0, "One minute of clock ticks must not rebuild the player/menu")
+        model.position = 60
+        expect(clockTicks == 240, "Unchanged clock values don't publish duplicate ticks")
+        model.paused = true
+        expect(chromeInvalidations == 1, "Play/pause still updates the controls")
+        withExtendedLifetime((chromeObserver, clockObserver)) {}
+
+        expect(!PlaybackPresentation.shouldShowUpNext(position: 1, duration: 100,
+            leadSeconds: -1, hasNextEpisode: true), "Next episode hidden early")
+        expect(PlaybackPresentation.shouldShowUpNext(position: 75, duration: 100,
+            leadSeconds: -1, hasNextEpisode: true), "Next episode appears at the automatic boundary")
+        expect(!PlaybackPresentation.shouldShowUpNext(position: 99, duration: 100,
+            leadSeconds: 0, hasNextEpisode: true), "Disabled up-next stays hidden")
+        expect(!PlaybackPresentation.shouldShowUpNext(position: 99, duration: 100,
+            leadSeconds: -1, hasNextEpisode: false), "Movies never show up-next")
+        expect(!PlaybackPresentation.shouldShowUpNext(position: .nan, duration: 100,
+            leadSeconds: -1, hasNextEpisode: true), "Malformed position cannot activate up-next")
+        expect(!PlaybackPresentation.shouldShowUpNext(position: 90, duration: .infinity,
+            leadSeconds: -1, hasNextEpisode: true), "Unknown duration cannot activate up-next")
+        expect(!PlaybackPresentation.shouldShowUpNext(position: 1, duration: .greatestFiniteMagnitude,
+            leadSeconds: -1, hasNextEpisode: true), "Extreme duration is safe without an Int overflow")
+        expect(PlaybackPresentation.progress(position: .nan, duration: 100) == 0,
+               "Timeline geometry rejects invalid timestamps")
+        expect(PlaybackPresentation.progress(position: 110, duration: 100) == 1,
+               "Timeline geometry stays within its bounds")
         model.controller = old
         expect(model.owns(old), "Controller owns its model")
         let firstStop = Task { @MainActor in await model.shutdown() }

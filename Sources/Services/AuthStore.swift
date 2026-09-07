@@ -13,6 +13,7 @@ final class AuthStore: ObservableObject {
     private let keyAuth = "harbor.stremio.authKey"
     private let keyEmail = "harbor.stremio.email"
     private var playbackSaveTask: Task<Void, Never>?
+    private var libraryLoad: (id: UUID, key: String, task: Task<[StremioService.LibraryItem], Never>)?
 
     func savePlaybackProgress(meta: MetaItem, videoId: String, season: Int?, episode: Int?,
                               position: Double, duration: Double, existing: StremioService.LibraryItem?) {
@@ -28,8 +29,8 @@ final class AuthStore: ObservableObject {
 
     func refreshAfterPlayback() async {
         await playbackSaveTask?.value
+        invalidateLibraryLoad()
         await loadLibrary()
-        await loadContinueWatching()
     }
 
     init() {
@@ -45,40 +46,52 @@ final class AuthStore: ObservableObject {
     }
 
     func loadContinueWatching() async {
-        guard let authKey else { return }
-        let cw = await StremioService.continueWatching(authKey: authKey)
-        guard self.authKey == authKey else { return }
-        continueWatching = cw.map { $0.asCwItem }
+        await loadLibrary()
     }
 
     func loadLibrary() async {
         guard let authKey else { libraryItems = []; return }
-        let items = await StremioService.library(authKey: authKey)
-        guard self.authKey == authKey else { return }
+        let request: (id: UUID, key: String, task: Task<[StremioService.LibraryItem], Never>)
+        if let existing = libraryLoad, existing.key == authKey {
+            request = existing
+        } else {
+            libraryLoad?.task.cancel()
+            request = (UUID(), authKey, Task { await StremioService.library(authKey: authKey) })
+            libraryLoad = request
+        }
+        let items = await request.task.value
+        guard self.authKey == authKey, libraryLoad?.id == request.id else { return }
+        libraryLoad = nil
         libraryItems = items
+        continueWatching = items.filter(\.isContinueWatching)
+            .sorted { ($0.state?.lastWatched ?? "") > ($1.state?.lastWatched ?? "") }
+            .map(\.asCwItem)
     }
 
     func clearContinueWatching(_ id: String) async {
+        invalidateLibraryLoad()
         continueWatching.removeAll { $0.id == id }
         guard let authKey else { return }
         await StremioService.clearContinueWatching(authKey: authKey, id: id)
-        await loadContinueWatching()
+        guard self.authKey == authKey else { return }
+        invalidateLibraryLoad()
         await loadLibrary()
     }
 
     func removeFromHistory(_ id: String) async {
+        invalidateLibraryLoad()
         libraryItems.removeAll { $0._id == id }
         continueWatching.removeAll { $0.id == id }
         guard let authKey else { return }
         await StremioService.removeFromHistory(authKey: authKey, id: id)
+        guard self.authKey == authKey else { return }
+        invalidateLibraryLoad()
         await loadLibrary()
-        await loadContinueWatching()
     }
 
     func refreshAccountData() async {
         await loadAddons()
         await loadLibrary()
-        await loadContinueWatching()
     }
 
     var isSignedIn: Bool { authKey != nil }
@@ -95,6 +108,7 @@ final class AuthStore: ObservableObject {
     }
 
     func logout() {
+        invalidateLibraryLoad()
         authKey = nil
         email = nil
         addons = []
@@ -108,6 +122,12 @@ final class AuthStore: ObservableObject {
     func loadAddons() async {
         guard let authKey else { return }
         let list = await StremioService.userAddons(authKey: authKey)
+        guard self.authKey == authKey, !Task.isCancelled else { return }
         addons = list
+    }
+
+    private func invalidateLibraryLoad() {
+        libraryLoad?.task.cancel()
+        libraryLoad = nil
     }
 }

@@ -45,6 +45,14 @@ final class MPVViewController: UIViewController, HarborPlayerController {
     private var cachedSummary = (height: 0, audioCodec: "", audioOut: "")
     private var cachedChapters: [MediaChapter] = []
     private var lastSnapshotAt = 0.0 // mpvQueue only
+    private var lastTrackSnapshotAt = 0.0
+    private var lastChapterSnapshotAt = 0.0
+    private var snapshotTrackCount = -1
+    private var snapshotChapterCount = -1
+    private var snapshotAudioID = -2
+    private var snapshotSubtitleID = -2
+    private var tracksDirty = true
+    private var lastLogLine = ""
 
     init(url: URL, model: PlayerModel, startAt: Double, anime4K: Bool,
          requestHeaders: [String: String]) {
@@ -245,24 +253,26 @@ final class MPVViewController: UIViewController, HarborPlayerController {
 
     private func drainEvents() {
         // Only called on mpvQueue, as are all native reads and destruction.
+        var lines: [String] = []
+        var drained = 0
         do {
-            while let handle = self.mpv {
+            while let handle = self.mpv, drained < 256 {
                 guard let event = mpv_wait_event(handle, 0), event.pointee.event_id != MPV_EVENT_NONE else { break }
+                drained += 1
                 switch event.pointee.event_id {
+                case MPV_EVENT_FILE_LOADED:
+                    tracksDirty = true
+                    lastChapterSnapshotAt = 0
                 case MPV_EVENT_LOG_MESSAGE:
                     if let msg = UnsafeMutablePointer<mpv_event_log_message>(OpaquePointer(event.pointee.data)) {
                         let prefix = String(cString: msg.pointee.prefix)
                         let text = String(cString: msg.pointee.text).trimmingCharacters(in: .newlines)
                         if !text.isEmpty {
-                            self.log.warning("[\(prefix, privacy: .public)] \(text, privacy: .public)")
-                            // Also surface in the in-player debug panel, so a problem on the
-                            // Apple TV can be read (and screenshotted) without a Mac.
-                            let line = "[\(prefix)] \(text)"
-                            DispatchQueue.main.async { [weak self] in
-                                guard let self, !self.shutdownGate.isStopping,
-                                      let m = self.model, m.owns(self) else { return }
-                                m.logLines.append(line)
-                                if m.logLines.count > 40 { m.logLines.removeFirst(m.logLines.count - 40) }
+                            let line = String("[\(prefix)] \(text)".prefix(2000))
+                            if line != lastLogLine {
+                                lastLogLine = line
+                                self.log.warning("\(line, privacy: .public)")
+                                lines.append(line)
                             }
                         }
                     }
@@ -289,6 +299,15 @@ final class MPVViewController: UIViewController, HarborPlayerController {
                 }
             }
         }
+        if !lines.isEmpty {
+            let batch = Array(lines.suffix(40))
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.shutdownGate.isStopping,
+                      let model = self.model, model.owns(self) else { return }
+                // One bounded publication per poll, not two per warning line.
+                model.logLines = Array((model.logLines + batch).suffix(40))
+            }
+        }
     }
 
     private func tickOnPlayerQueue() {
@@ -304,16 +323,35 @@ final class MPVViewController: UIViewController, HarborPlayerController {
         let now = ProcessInfo.processInfo.systemUptime
         if now - lastSnapshotAt >= 1 {
             lastSnapshotAt = now
-            let tracks = readTracks(ofType: "audio") + readTracks(ofType: "sub")
+            let trackCount = getInt("track-list/count")
+            let audioID = getInt("aid")
+            let subtitleID = getInt("sid")
+            let refreshTracks = tracksDirty || trackCount != snapshotTrackCount
+                || audioID != snapshotAudioID || subtitleID != snapshotSubtitleID
+                || now - lastTrackSnapshotAt >= 15
+            let tracks = refreshTracks ? readTracks(ofType: "audio") + readTracks(ofType: "sub") : nil
+            if refreshTracks {
+                tracksDirty = false
+                lastTrackSnapshotAt = now
+                snapshotTrackCount = trackCount
+                snapshotAudioID = audioID
+                snapshotSubtitleID = subtitleID
+            }
             let summary = (height: getInt("video-params/h"),
                            audioCodec: getString("audio-codec-name") ?? "",
                            audioOut: getString("current-ao") ?? "")
-            let chapters = readChapters()
+            let chapterCount = getInt("chapter-list/count")
+            let refreshChapters = chapterCount != snapshotChapterCount || now - lastChapterSnapshotAt >= 30
+            let chapters = refreshChapters ? readChapters() : nil
+            if refreshChapters {
+                snapshotChapterCount = chapterCount
+                lastChapterSnapshotAt = now
+            }
             DispatchQueue.main.async { [weak self] in
                 guard let self, !self.shutdownGate.isStopping else { return }
-                self.cachedTracks = tracks
+                if let tracks { self.cachedTracks = tracks }
                 self.cachedSummary = summary
-                self.cachedChapters = chapters
+                if let chapters { self.cachedChapters = chapters }
             }
         }
         DispatchQueue.main.async { [weak self] in
@@ -368,9 +406,17 @@ final class MPVViewController: UIViewController, HarborPlayerController {
     }
 
     func setAudioTrack(_ id: Int) {
-        mpvQueue.async { [weak self] in self?.setString("aid", id < 0 ? "no" : String(id)) }
+        mpvQueue.async { [weak self] in
+            self?.setString("aid", id < 0 ? "no" : String(id))
+            self?.tracksDirty = true
+        }
     }
-    func setSubtitleTrack(_ id: Int) { mpvQueue.async { [weak self] in self?.setString("sid", id < 0 ? "no" : String(id)) } }
+    func setSubtitleTrack(_ id: Int) {
+        mpvQueue.async { [weak self] in
+            self?.setString("sid", id < 0 ? "no" : String(id))
+            self?.tracksDirty = true
+        }
+    }
     func setSpeed(_ speed: Double) { mpvQueue.async { [weak self] in self?.setString("speed", String(format: "%.2f", speed)) } }
     func setSubDelay(_ s: Double) { mpvQueue.async { [weak self] in self?.setString("sub-delay", String(format: "%.2f", s)) } }
     func setAudioDelay(_ s: Double) { mpvQueue.async { [weak self] in self?.setString("audio-delay", String(format: "%.2f", s)) } }

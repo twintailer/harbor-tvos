@@ -77,6 +77,7 @@ struct PlayerView: View {
     @State private var noticeTask: Task<Void, Never>?
     @State private var trackRefreshTask: Task<Void, Never>?
     @State private var pendingSubtitleTrackID: Int?
+    @State private var upNextActive = false
 
     // Scrub-to-seek
     @State private var scrubbing = false
@@ -279,17 +280,24 @@ struct PlayerView: View {
             guard error != nil, !handledEnd, !isSwitching, !terminalError else { return }
             fallbackFromStalledEngine(activeEngine)
         }
-        .onReceive(model.$position) { position in
+        .onReceive(model.clock.$position) { position in
             guard !handledEnd, !isSwitching else { return }
             maybeAutoSelectTracks()
             monitorAudioOutput()
             loadIntroSkipIfNeeded()
             updateActiveSkip(at: position)
+            updateUpNext(position: position, duration: model.duration)
             if selected == .upNext && !upNextActive { selected = .play }
             if model.duration > 0, position > 0, abs(position - lastSavedPosition) >= 30 {
                 lastSavedPosition = position
                 target.onProgress?(position, model.duration)
             }
+        }
+        .onReceive(model.clock.$duration) { duration in
+            updateUpNext(position: model.position, duration: duration)
+        }
+        .onChange(of: nextEpisodeLeadSec) { _, _ in
+            updateUpNext(position: model.position, duration: model.duration)
         }
         .onReceive(model.$ended) { ended in
             guard ended, !isSwitching else { return }
@@ -516,7 +524,8 @@ struct PlayerView: View {
                     Spacer()
                 }
 
-                HStack(alignment: .center, spacing: 16) {
+                HarborPlayerGlassGroup {
+                  HStack(alignment: .center, spacing: 16) {
                     HStack(spacing: 14) {
                         if showRestartButton { ctrlButton(.restart, "arrow.counterclockwise") }
                         if showSeekButtons { ctrlButton(.back, "gobackward.\(seekBackStep)") }
@@ -534,6 +543,7 @@ struct PlayerView: View {
                         if showAspectButton { ctrlButton(.aspect, "aspectratio") }
                         if showAnimeButton { ctrlButton(.anime, "sparkles") }
                     }
+                  }
                 }
 
                 HStack {
@@ -546,18 +556,9 @@ struct PlayerView: View {
                 }
                 .foregroundStyle(.white.opacity(0.88))
 
-                scrubber
-
-                HStack {
-                    Text(timeString(scrubbing ? scrubTarget : model.position))
-                        .font(.system(size: 22, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(scrubbing ? accent : .white.opacity(0.92))
-                    Spacer()
-                    let shown = scrubbing ? scrubTarget : model.position
-                    Text("−\(timeString(max(0, model.duration - shown)))")
-                        .font(.system(size: 22, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.78))
-                }
+                HarborPlayerTimeline(clock: model.clock,
+                                     previewPosition: scrubbing ? scrubTarget : nil,
+                                     focused: selected == .scrub, accent: accent)
             }
             .padding(.horizontal, 68)
             .padding(.bottom, 42)
@@ -577,26 +578,6 @@ struct PlayerView: View {
         .transition(.opacity)
     }
 
-    private var scrubber: some View {
-        let focused = (selected == .scrub)
-        let shown = scrubbing ? scrubTarget : model.position
-        return GeometryReader { geo in
-            let frac = model.duration > 0 ? min(1, max(0, shown / model.duration)) : 0
-            let w = geo.size.width
-            let barH: CGFloat = focused ? 11 : 7
-            let knob: CGFloat = focused ? 28 : 20
-            ZStack(alignment: .leading) {
-                Capsule().fill(.white.opacity(0.32)).frame(height: barH)
-                Capsule().fill(accent).frame(width: max(0, w * frac), height: barH)
-                Circle().fill(focused ? accent : .white).frame(width: knob, height: knob)
-                    .offset(x: max(0, w * frac - knob / 2))
-            }
-            .frame(maxHeight: .infinity, alignment: .center)
-            .animation(.easeOut(duration: 0.12), value: frac)
-        }
-        .frame(height: 30)
-    }
-
     private func ctrlButton(_ c: Control, _ icon: String, big: Bool = false) -> some View {
         let sel = (selected == c)
         let d: CGFloat = big ? 78 : 68
@@ -607,9 +588,9 @@ struct PlayerView: View {
             .background(Circle().fill(sel ? Color.white : Color.white.opacity(0.13)))
             .harborGlass(cornerRadius: d / 2, tint: sel ? .white.opacity(0.7) : .black.opacity(0.04))
             .overlay(Circle().stroke(.white.opacity(sel ? 0.92 : 0.28), lineWidth: sel ? 2.5 : 1))
-            .shadow(color: .black.opacity(0.42), radius: 15, y: 8)
-            .scaleEffect(sel ? 1.10 : 1.0)
-            .animation(.spring(response: 0.28, dampingFraction: 0.72), value: sel)
+            .shadow(color: .black.opacity(sel ? 0.30 : 0), radius: 6, y: 3)
+            .scaleEffect(sel ? 1.05 : 1.0)
+            .animation(.easeOut(duration: 0.14), value: sel)
     }
 
     private func skipPill(_ segment: SkipSegment) -> some View {
@@ -638,11 +619,10 @@ struct PlayerView: View {
         .transition(.opacity.combined(with: .scale(scale: 0.96)))
     }
 
-    private var upNextActive: Bool {
-        guard target.onEnded != nil, nextEpisodeLeadSec != 0, model.duration > 0 else { return false }
-        let automatic = max(25, min(90, Int(model.duration * 0.045)))
-        let lead = nextEpisodeLeadSec < 0 ? automatic : nextEpisodeLeadSec
-        return model.position > 0 && model.duration - model.position <= Double(lead)
+    private func updateUpNext(position: Double, duration: Double) {
+        let active = PlaybackPresentation.shouldShowUpNext(position: position, duration: duration,
+            leadSeconds: nextEpisodeLeadSec, hasNextEpisode: target.onEnded != nil)
+        if upNextActive != active { upNextActive = active }
     }
 
     private var upNextPill: some View {
@@ -954,7 +934,7 @@ struct PlayerView: View {
                         .padding(.horizontal, 28).padding(.top, 26).padding(.bottom, 10)
                     ScrollViewReader { proxy in
                         ScrollView {
-                            VStack(alignment: .leading, spacing: 3) {
+                            LazyVStack(alignment: .leading, spacing: 3) {
                                 ForEach(Array(rows.enumerated()), id: \.offset) { i, row in
                                     if row.isHeader {
                                         Text(row.label.uppercased())
@@ -985,7 +965,7 @@ struct PlayerView: View {
                                         .background(focused ? Color.white.opacity(0.94) : Color.clear)
                                         .clipShape(Capsule(style: .continuous))
                                         .scaleEffect(focused ? 1.012 : 1)
-                                        .animation(.spring(response: 0.24, dampingFraction: 0.82), value: optionRow)
+                                        .animation(.easeOut(duration: 0.14), value: focused)
                                         .id(i)
                                     }
                                 }
@@ -1650,15 +1630,54 @@ struct PlayerView: View {
     }
 }
 
-private extension View {
-    @ViewBuilder
-    func harborGlass(cornerRadius: CGFloat, tint: Color? = nil) -> some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+private struct HarborPlayerGlassGroup<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    @ViewBuilder var body: some View {
         if #available(tvOS 26.0, *) {
-            glassEffect(.regular.tint(tint), in: shape)
+            GlassEffectContainer(spacing: 12) { content() }
         } else {
-            background(.ultraThinMaterial, in: shape)
-                .overlay(shape.stroke(.white.opacity(0.12), lineWidth: 1))
+            content()
+        }
+    }
+}
+
+/// The sole observer of the decoder clock. Hidden controls don't instantiate it,
+/// so playback with the chrome dismissed has no progress-driven SwiftUI rendering.
+private struct HarborPlayerTimeline: View {
+    @ObservedObject var clock: PlaybackClock
+    let previewPosition: Double?
+    let focused: Bool
+    let accent: Color
+
+    private var shown: Double { previewPosition ?? clock.position }
+
+    var body: some View {
+        VStack(spacing: 14) {
+            GeometryReader { geo in
+                let fraction = PlaybackPresentation.progress(position: shown, duration: clock.duration)
+                let width = geo.size.width
+                let barHeight: CGFloat = focused ? 10 : 6
+                let knob: CGFloat = focused ? 26 : 18
+                ZStack(alignment: .leading) {
+                    Capsule().fill(.white.opacity(0.30)).frame(height: barHeight)
+                    Capsule().fill(accent).frame(width: width * fraction, height: barHeight)
+                    Circle().fill(focused ? accent : .white).frame(width: knob, height: knob)
+                        .offset(x: min(max(0, width - knob), max(0, width * fraction - knob / 2)))
+                }
+                .frame(maxHeight: .infinity)
+                // A native tick is already smooth enough at TV distance; an implicit
+                // animation here schedules extra frames while Anime4K is rendering.
+            }
+            .frame(height: 30)
+            HStack {
+                Text(PlayerModel.fmt(shown))
+                    .foregroundStyle(previewPosition != nil ? accent : .white.opacity(0.92))
+                Spacer()
+                Text("−\(PlayerModel.fmt(max(0, clock.duration - shown)))")
+                    .foregroundStyle(.white.opacity(0.78))
+            }
+            .font(.system(size: 22, weight: .semibold).monospacedDigit())
         }
     }
 }

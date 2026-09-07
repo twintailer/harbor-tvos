@@ -116,8 +116,10 @@ struct ContinueCard: View {
                     LinearGradient(colors: [.clear, .black.opacity(0.75)],
                                    startPoint: .center, endPoint: .bottom)
 
-                    // "▶ S1E5" pill like the Windows CW rail.
-                    HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(entry.meta.name)
+                            .font(.system(size: width > 500 ? 32 : 25, weight: .bold))
+                            .lineLimit(2)
                         HStack(spacing: 6) {
                             Image(systemName: "play.fill").font(.system(size: 12, weight: .bold))
                             if let s = entry.season, let e = entry.episode {
@@ -130,7 +132,7 @@ struct ContinueCard: View {
                         .padding(.horizontal, 10).padding(.vertical, 5)
                         .background(Capsule().fill(.black.opacity(0.6)))
                     }
-                    .padding(12)
+                    .padding(22)
                     .padding(.bottom, 6)
 
                     // Progress along the very bottom.
@@ -141,7 +143,7 @@ struct ContinueCard: View {
                                 ZStack(alignment: .leading) {
                                     Rectangle().fill(.white.opacity(0.25))
                                     Rectangle().fill(focusColor)
-                                        .frame(width: geo.size.width * entry.progress)
+                                        .frame(width: geo.size.width * (entry.progress.isFinite ? min(1, max(0, entry.progress)) : 0))
                                 }
                             }
                             .frame(height: 5)
@@ -164,8 +166,18 @@ struct ContinueCard: View {
                 }
             }
 
-            Text(entry.meta.name)
-                .font(.system(size: 20, weight: .medium))
+            HStack(spacing: 10) {
+                if let season = entry.season, let episode = entry.episode {
+                    Text("Season \(season) · Episode \(episode)")
+                } else { Text(entry.meta.name) }
+                if let remaining = entry.remainingSeconds, remaining.isFinite,
+                   remaining > 0, remaining < Double(Int.max) * 60 {
+                    Text("·").foregroundStyle(HarborTVDesign.tertiaryText)
+                    Text("\(Int(ceil(remaining / 60))) min left")
+                        .foregroundStyle(HarborTVDesign.secondaryText)
+                }
+            }
+                .font(.system(size: 19, weight: .medium))
                 .foregroundStyle(.white.opacity(0.9))
                 .lineLimit(1)
                 .frame(width: width, alignment: .leading)

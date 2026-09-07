@@ -26,7 +26,10 @@ struct HarborTVApp: App {
         WindowGroup {
             RootView().environmentObject(auth)
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
-                    Task { await HarborArtworkCache.shared.purge() }
+                    Task {
+                        await HarborArtworkCache.shared.purge()
+                        await AddonService.purgeCatalogCache()
+                    }
                 }
         }
     }
@@ -39,6 +42,7 @@ struct RootView: View {
     @State private var sidebarEnabled = false
     @State private var sidebarTask: Task<Void, Never>?
     @FocusState private var sidebarFocus: HarborSection?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var sidebarExpanded: Bool { sidebarFocus != nil }
 
@@ -81,9 +85,10 @@ struct RootView: View {
                 sidebarEnabled = true
             }
         }
-        .animation(.spring(response: 0.34, dampingFraction: 0.86), value: sidebarExpanded)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: sidebarExpanded)
         .tint(sidebarAccent)
         .preferredColorScheme(.dark)
+        .onDisappear { sidebarTask?.cancel() }
     }
 
     private func openSidebar() {
@@ -187,6 +192,7 @@ private struct HarborSidebar: View {
     let accent: Color
     let interfaceStyle: String
     let onSelected: (HarborSection) -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static let collapsedWidth: CGFloat = 82
     static let expandedWidth: CGFloat = 286
@@ -242,11 +248,19 @@ private struct HarborSidebar: View {
         .frame(width: width, alignment: .leading)
         .frame(maxHeight: .infinity, alignment: .top)
         .clipped()
-        .background((expanded ? HarborTVDesign.canvas.opacity(0.995) : .black.opacity(0.62)).ignoresSafeArea())
+        .background {
+            if expanded {
+                Color.clear.harborGlass(cornerRadius: 30, tint: .black.opacity(0.58))
+                    .padding(.vertical, 18)
+                    .padding(.leading, 8)
+            } else {
+                HarborTVDesign.canvas.opacity(0.97).ignoresSafeArea()
+            }
+        }
         .overlay(alignment: .trailing) {
             Rectangle().fill(.white.opacity(expanded ? 0.08 : 0.045)).frame(width: 1)
         }
-        .animation(.spring(response: 0.34, dampingFraction: 0.86), value: expanded)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: expanded)
         .onChange(of: expanded) { _, isExpanded in
             if isExpanded && focus.wrappedValue != selection { focus.wrappedValue = selection }
         }
@@ -255,6 +269,7 @@ private struct HarborSidebar: View {
 
 private struct HarborSidebarRow: View {
     @Environment(\.isFocused) private var isFocused
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let section: HarborSection
     let selected: Bool
     let expanded: Bool
@@ -268,11 +283,11 @@ private struct HarborSidebarRow: View {
         HStack(spacing: 16) {
             Image(systemName: section.icon)
                 .font(.system(size: expanded ? 25 : 29, weight: selected ? .semibold : .regular))
-                .foregroundStyle(highlighted ? .white : .white.opacity(0.52))
+                .foregroundStyle(isFocused && expanded ? .black : (highlighted ? .white : .white.opacity(0.52)))
                 .frame(width: 42, height: 42)
             Text(section.label)
                 .font(.system(size: 24, weight: selected ? .semibold : .medium))
-                .foregroundStyle(highlighted ? .white : .white.opacity(0.64))
+                .foregroundStyle(isFocused && expanded ? .black : (highlighted ? .white : .white.opacity(0.64)))
                 .lineLimit(1)
                 .opacity(expanded ? 1 : 0)
             Spacer(minLength: 0)
@@ -281,8 +296,8 @@ private struct HarborSidebarRow: View {
         .padding(.trailing, 16)
         .frame(width: expanded ? width - 24 : width, height: 62, alignment: .leading)
         .background {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(expanded && highlighted ? .white.opacity(interfaceStyle == "max" ? 0.18 : 0.13) : .clear)
+            Capsule()
+                .fill(expanded && isFocused ? .white.opacity(0.97) : (expanded && selected ? .white.opacity(0.10) : .clear))
         }
         .overlay(alignment: .leading) {
             Capsule()
@@ -290,7 +305,7 @@ private struct HarborSidebarRow: View {
                 .frame(width: 4, height: 30)
                 .padding(.leading, expanded ? 3 : 7)
         }
-        .scaleEffect(isFocused ? 1.025 : 1, anchor: .leading)
-        .animation(.easeOut(duration: 0.13), value: isFocused)
+        .scaleEffect(reduceMotion ? 1 : (isFocused ? 1.015 : 1), anchor: .leading)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.13), value: isFocused)
     }
 }

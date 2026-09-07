@@ -8,9 +8,20 @@ import UIKit
 actor HarborArtworkCache {
     static let shared = HarborArtworkCache()
     private let images = NSCache<NSString, UIImage>()
-    private var inFlight: [String: Task<UIImage?, Never>] = [:]
+    private struct PendingImage {
+        let id: UUID
+        let cacheGeneration: UInt
+        let task: Task<Void, Never>
+        var consumers: [UUID: CheckedContinuation<UIImage?, Never>]
+    }
+    private struct LoadSlot {
+        let id: UUID
+        let continuation: CheckedContinuation<Bool, Never>
+    }
+    private var inFlight: [String: PendingImage] = [:]
     private var activeLoads = 0
-    private var slots: [CheckedContinuation<Void, Never>] = []
+    private var slots: [LoadSlot] = []
+    private var cacheGeneration: UInt = 0
 
     init() {
         images.countLimit = 120
@@ -18,30 +29,90 @@ actor HarborArtworkCache {
     }
 
     func image(for rawURL: String?, maxPixelSize: CGFloat = 1600) async -> UIImage? {
-        guard let rawURL, let url = URL(string: rawURL), !rawURL.isEmpty else { return nil }
-        let key = "\(rawURL)|\(Int(maxPixelSize))" as NSString
-        if let cached = images.object(forKey: key) { return cached }
-        if let task = inFlight[key as String] { return await task.value }
-        let task = Task { await self.load(url: url, maxPixelSize: maxPixelSize) }
-        inFlight[key as String] = task
-        let image = await task.value
-        inFlight[key as String] = nil
-        if let image, let cgImage = image.cgImage {
-            images.setObject(image, forKey: key, cost: cgImage.bytesPerRow * cgImage.height)
+        guard !Task.isCancelled, let rawURL, !rawURL.isEmpty,
+              let url = URL(string: rawURL), maxPixelSize.isFinite else { return nil }
+        let pixelSize = min(3840, max(64, maxPixelSize.rounded(.up)))
+        let key = "\(rawURL)|\(Int(pixelSize))"
+        if let cached = images.object(forKey: key as NSString) { return cached }
+        let consumer = UUID()
+        // A disappearing card must release its request immediately. Another visible
+        // card sharing this image keeps the download alive; the last one cancels it.
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                guard !Task.isCancelled else { continuation.resume(returning: nil); return }
+                if inFlight[key] != nil {
+                    inFlight[key]?.consumers[consumer] = continuation
+                } else {
+                    let id = UUID()
+                    let task = Task {
+                        let image = await self.load(url: url, maxPixelSize: pixelSize)
+                        self.finish(key: key, id: id, image: image)
+                    }
+                    inFlight[key] = PendingImage(id: id, cacheGeneration: cacheGeneration,
+                        task: task, consumers: [consumer: continuation])
+                }
+            }
+        } onCancel: {
+            Task { await self.cancelConsumer(consumer, key: key) }
         }
-        return image
     }
 
-    func purge() { images.removeAllObjects() }
+    func purge() {
+        images.removeAllObjects()
+        // Do not refill a freshly purged cache with downloads already in progress.
+        cacheGeneration &+= 1
+    }
+
+    private func cancelConsumer(_ consumer: UUID, key: String) {
+        guard let continuation = inFlight[key]?.consumers.removeValue(forKey: consumer) else { return }
+        continuation.resume(returning: nil)
+        if inFlight[key]?.consumers.isEmpty == true {
+            let load = inFlight.removeValue(forKey: key)
+            load?.task.cancel()
+        }
+    }
+
+    private func finish(key: String, id: UUID, image: UIImage?) {
+        // A canceled load may finish after a new request for the same URL starts.
+        guard let pending = inFlight[key], pending.id == id else { return }
+        inFlight[key] = nil
+        if pending.cacheGeneration == cacheGeneration,
+           let image, let cgImage = image.cgImage {
+            images.setObject(image, forKey: key as NSString,
+                             cost: cgImage.bytesPerRow * cgImage.height)
+        }
+        for consumer in pending.consumers.values { consumer.resume(returning: image) }
+    }
+
+    private func acquireSlot() async -> Bool {
+        guard !Task.isCancelled else { return false }
+        if activeLoads < 4 { activeLoads += 1; return true }
+        let id = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                guard !Task.isCancelled else { continuation.resume(returning: false); return }
+                slots.append(LoadSlot(id: id, continuation: continuation))
+            }
+        } onCancel: {
+            Task { await self.cancelSlot(id) }
+        }
+    }
+
+    private func cancelSlot(_ id: UUID) {
+        guard let index = slots.firstIndex(where: { $0.id == id }) else { return }
+        slots.remove(at: index).continuation.resume(returning: false)
+    }
+
+    private func releaseSlot() {
+        if slots.isEmpty { activeLoads -= 1 }
+        else { slots.removeFirst().continuation.resume(returning: true) }
+    }
 
     private func load(url: URL, maxPixelSize: CGFloat) async -> UIImage? {
         // Avoid a burst of dozens of image decodes competing with VideoToolbox.
-        if activeLoads >= 4 {
-            await withCheckedContinuation { slots.append($0) }
-        } else { activeLoads += 1 }
-        defer {
-            if slots.isEmpty { activeLoads -= 1 } else { slots.removeFirst().resume() }
-        }
+        guard await acquireSlot() else { return nil }
+        defer { releaseSlot() }
+        guard !Task.isCancelled else { return nil }
 
         var request = URLRequest(url: url)
         request.cachePolicy = .returnCacheDataElseLoad
@@ -58,14 +129,29 @@ actor HarborArtworkCache {
                                                 for: request)
         }
 
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+        guard !Task.isCancelled else { return nil }
+        // ImageIO work stays off this actor, so a large hero decode cannot delay
+        // cache hits, cancellation or new visible-card requests behind it.
+        let decode = Task.detached(priority: .userInitiated) {
+            Self.decode(data: data, maxPixelSize: maxPixelSize)
+        }
+        return await withTaskCancellationHandler {
+            let image = await decode.value
+            return Task.isCancelled ? nil : image
+        } onCancel: { decode.cancel() }
+    }
+
+    private nonisolated static func decode(data: Data, maxPixelSize: CGFloat) -> UIImage? {
+        guard !Task.isCancelled,
+              let source = CGImageSourceCreateWithData(data as CFData,
+                [kCGImageSourceShouldCache: false] as CFDictionary),
               let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
                 kCGImageSourceCreateThumbnailWithTransform: true,
                 kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
                 kCGImageSourceShouldCacheImmediately: true,
               ] as CFDictionary) else { return nil }
-        return UIImage(cgImage: cgImage)
+        return Task.isCancelled ? nil : UIImage(cgImage: cgImage)
     }
 }
 
@@ -78,6 +164,9 @@ struct HarborArtworkImage: View {
 
     @State private var image: UIImage?
     @State private var finished = false
+    @State private var loadedKey: String?
+
+    private var requestKey: String { "\(url ?? "")|\(maxPixelSize)" }
 
     var body: some View {
         ZStack {
@@ -95,13 +184,16 @@ struct HarborArtworkImage: View {
             }
         }
         .clipped()
-        .task(id: url) {
+        .task(id: requestKey) {
+            guard loadedKey != requestKey else { return }
+            loadedKey = nil
             image = nil
             finished = false
             let loaded = await HarborArtworkCache.shared.image(for: url,
                                                                  maxPixelSize: maxPixelSize)
             guard !Task.isCancelled else { return }
             image = loaded
+            if loaded != nil { loadedKey = requestKey }
             finished = true
         }
     }

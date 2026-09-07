@@ -7,22 +7,29 @@ struct HomeView: View {
     @State private var rows: [CatalogRow] = []
     @State private var loading = true
     @State private var refreshRevision = 0
+    @State private var loadedRevision: String?
     @AppStorage(SubtitleStyle.Key.homeShowAllRows) private var showAllRows = false
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 46) {
-                    if let featured {
-                        HarborDesktopHero(item: featured, onSearch: onSearch)
-                    } else {
-                        HarborHeroPlaceholder(onSearch: onSearch)
-                    }
-
                     if !auth.continueWatching.isEmpty {
+                        HStack {
+                            Text("Your evening. Your stories.")
+                                .font(.system(size: 32, weight: .semibold))
+                            Spacer()
+                            Button(action: onSearch) { Label("Search", systemImage: "magnifyingglass") }
+                                .buttonStyle(HarborActionButtonStyle(tone: .quiet))
+                        }
+                        .padding(.horizontal, 60).padding(.top, 28)
                         ContinueRowView(entries: auth.continueWatching) { entry in
                             Task { await auth.clearContinueWatching(entry.id) }
                         }
+                    } else if let featured {
+                        HarborDesktopHero(item: featured, onSearch: onSearch)
+                    } else {
+                        HarborHeroPlaceholder(onSearch: onSearch)
                     }
 
                     if loading {
@@ -50,23 +57,32 @@ struct HomeView: View {
                 }
                 .padding(.bottom, 84)
             }
+            .scrollIndicators(.hidden)
             .onExitCommand(perform: onRootBack)
             .navigationDestination(for: MetaItem.self) { item in
                 DetailView(item: item)
             }
         }
         // Rebuild rows when the signed-in addons change.
-        .task(id: "\(addonRevision)-\(showAllRows)-\(refreshRevision)") {
+        .task(id: contentRevision) {
+            let revision = contentRevision
+            // Returning from a title must preserve rails, pagination and focus.
+            guard loadedRevision != revision else { return }
             loading = rows.isEmpty
             let loaded = await AddonService.homeRows(addons: auth.addons)
             guard !Task.isCancelled else { return }
             rows = loaded
+            loadedRevision = revision
             loading = false
         }
     }
 
     private var addonRevision: String {
         auth.addons.map(\.transportUrl).joined(separator: "|")
+    }
+
+    private var contentRevision: String {
+        "\(addonRevision)-\(showAllRows)-\(refreshRevision)"
     }
 
     private var featured: MetaItem? {
@@ -83,7 +99,7 @@ private struct HarborDesktopHero: View {
         ZStack(alignment: .topLeading) {
             HarborArtworkImage(url: item.background ?? item.poster, maxPixelSize: 2200)
                 .frame(maxWidth: .infinity)
-                .frame(height: 610)
+                    .frame(height: 520)
 
             LinearGradient(
                 stops: [
@@ -119,7 +135,7 @@ private struct HarborDesktopHero: View {
                     .tracking(2.4)
                     .foregroundStyle(HarborTVDesign.cinemaRed)
                 Text(item.name)
-                    .font(.system(size: 68, weight: .heavy))
+                        .font(.system(size: 62, weight: .bold))
                     .foregroundStyle(.white)
                     .lineLimit(2)
                     .minimumScaleFactor(0.72)
@@ -151,16 +167,12 @@ private struct HarborDesktopHero: View {
                         Label("Watch options", systemImage: "play.fill")
                     }
                     .buttonStyle(HarborActionButtonStyle(tone: .primary))
-                    NavigationLink(value: item) {
-                        Label("More Info", systemImage: "info.circle")
-                    }
-                    .buttonStyle(HarborActionButtonStyle(tone: .secondary))
                 }
             }
             .padding(.leading, HarborTVDesign.pageInset)
             .padding(.bottom, 58)
         }
-        .frame(height: 610)
+        .frame(height: 520)
         .clipped()
     }
 
@@ -198,17 +210,18 @@ struct ContinueRowView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HarborSectionHeading(title: "Continue Watching", subtitle: "Pick up where you left off")
+            HarborSectionHeading(title: "Continue Watching")
                 .padding(.horizontal, 60)
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: 32) {
                     ForEach(entries) { entry in
-                        ContinueCard(entry: entry, onRemove: { onRemove(entry) })
+                        ContinueCard(entry: entry, width: 560, onRemove: { onRemove(entry) })
                     }
                 }
                 .padding(.horizontal, 60)
                 .padding(.vertical, 12)
             }
+            .scrollIndicators(.hidden)
         }
         .focusSection()
     }
@@ -221,6 +234,8 @@ struct CatalogRowView: View {
     @State private var nextSkip: Int
     @State private var loadingMore = false
     @State private var hasMore: Bool
+    @FocusState private var focusedID: String?
+    @State private var previewItem: MetaItem?
     @AppStorage(SubtitleStyle.Key.rowTitleScale) private var titleScale = 1.0
     @AppStorage(SubtitleStyle.Key.hideWatched) private var hideWatched = false
     @AppStorage(SubtitleStyle.Key.hideUnreleased) private var hideUnreleased = false
@@ -230,12 +245,13 @@ struct CatalogRowView: View {
         _loadedItems = State(initialValue: MetaItem.unique(row.items))
         _nextSkip = State(initialValue: row.items.count)
         _hasMore = State(initialValue: row.source != nil && !row.items.isEmpty)
+        _previewItem = State(initialValue: row.items.first)
     }
 
     private var visibleItems: [MetaItem] {
-        let watched = Set(auth.libraryItems.filter {
+        let watched: Set<String> = hideWatched ? Set(auth.libraryItems.filter {
             ($0.state?.flaggedWatched ?? 0) > 0 || $0.progressRatio >= 0.9
-        }.map(\._id))
+        }.map(\._id)) : []
         let currentYear = Calendar.current.component(.year, from: Date())
         return loadedItems.filter { item in
             if hideWatched && watched.contains(item.id) { return false }
@@ -247,17 +263,25 @@ struct CatalogRowView: View {
     }
 
     var body: some View {
+        let items = visibleItems
+        let loadAheadID = items.suffix(4).first?.contentKey
         VStack(alignment: .leading, spacing: 16) {
             HarborSectionHeading(title: row.title,
-                                 subtitle: visibleItems.isEmpty ? nil : "\(visibleItems.count)\(hasMore ? "+" : "") titles",
                                  scale: CGFloat(titleScale))
                 .padding(.horizontal, 60)
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: 26) {
-                    ForEach(visibleItems, id: \.contentKey) { item in
-                        HarborLandscapeCard(item: item)
+                    ForEach(items, id: \.contentKey) { item in
+                        // Fixed geometry: a cinematic lead tile, then portrait artwork.
+                        // No width animations/reflow while swiping through the row.
+                        let wide = item.contentKey == items.first?.contentKey
+                        NavigationLink(value: item) {
+                            HarborCatalogArtwork(item: item, wide: wide)
+                        }
+                        .buttonStyle(HarborCardFocusStyle())
+                        .focused($focusedID, equals: item.contentKey)
                             .onAppear {
-                                if item.contentKey == visibleItems.suffix(4).first?.contentKey {
+                                if item.contentKey == loadAheadID {
                                     Task { await loadMore() }
                                 }
                             }
@@ -271,7 +295,7 @@ struct CatalogRowView: View {
                                 else { Image(systemName: "plus.circle").font(.system(size: 34)) }
                                 Text(loadingMore ? "Loading…" : "More titles")
                             }
-                            .frame(width: 190, height: 197)
+                            .frame(width: 190, height: 270)
                         }
                         .buttonStyle(HarborCardFocusStyle())
                         // Remains focusable at the edge while the next batch loads.
@@ -281,8 +305,22 @@ struct CatalogRowView: View {
                 .padding(.horizontal, 60)
                 .padding(.vertical, 12)
             }
+            .scrollIndicators(.hidden)
+            if let item = items.first(where: { $0.contentKey == previewItem?.contentKey }) ?? items.first {
+                HarborRailSynopsis(item: item)
+                    .padding(.horizontal, 60)
+            }
         }
         .focusSection()
+        .task(id: focusedID) {
+            guard let focusedID else { return }
+            // Fast repeat-presses don't repeatedly replace large text subtrees.
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            guard !Task.isCancelled,
+                  let item = items.first(where: { $0.contentKey == focusedID }),
+                  previewItem?.contentKey != item.contentKey else { return }
+            previewItem = item
+        }
     }
 
     private func loadMore() async {
@@ -298,5 +336,50 @@ struct CatalogRowView: View {
             loadedItems.append(contentsOf: fresh)
         }
         loadingMore = false
+    }
+}
+
+private struct HarborCatalogArtwork: View {
+    let item: MetaItem
+    let wide: Bool
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            HarborArtworkImage(url: wide ? (item.background ?? item.poster) : item.poster,
+                               maxPixelSize: wide ? 1000 : 640, fallbackText: item.name)
+            if wide {
+                LinearGradient(colors: [.clear, .black.opacity(0.86)],
+                               startPoint: .center, endPoint: .bottom)
+                Text(item.name)
+                    .font(.system(size: 29, weight: .bold))
+                    .lineLimit(2).padding(22)
+            }
+        }
+        .frame(width: wide ? 480 : 180, height: 270)
+        .clipShape(RoundedRectangle(cornerRadius: HarborTVDesign.cardRadius))
+        .accessibilityLabel(item.name)
+    }
+}
+
+private struct HarborRailSynopsis: View {
+    let item: MetaItem
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 12) {
+                Text(item.name).fontWeight(.semibold).foregroundStyle(.white)
+                Text(item.type == "movie" ? "Movie" : (item.type == "anime" ? "Anime" : "Series"))
+                if let year = item.releaseInfo, !year.isEmpty { Text("·  \(year)") }
+                if let rating = item.imdbRating, !rating.isEmpty { ImdbBadge(rating: rating) }
+            }
+            .font(.system(size: 18)).foregroundStyle(HarborTVDesign.secondaryText)
+            .lineLimit(1)
+            Text(item.description ?? "Explore this title for episodes and watch options.")
+                .font(.system(size: 21)).foregroundStyle(HarborTVDesign.secondaryText)
+                .lineLimit(2).lineSpacing(3)
+        }
+        .frame(maxWidth: 1040, alignment: .leading)
+        .frame(height: 92, alignment: .topLeading)
+        .accessibilityElement(children: .combine)
     }
 }

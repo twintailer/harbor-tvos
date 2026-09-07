@@ -28,11 +28,26 @@ extension HarborPlayerController {
     func shutdown() { shutdown(completion: {}) }
 }
 
+/// High-frequency playback values are deliberately not published by PlayerModel.
+/// Only the timeline observes this clock; menus/native surfaces stay untouched.
+@MainActor
+final class PlaybackClock: ObservableObject {
+    @Published var position: Double = 0
+    @Published var duration: Double = 0
+}
+
 // Bridges the active playback engine to the SwiftUI controls overlay.
 @MainActor
 final class PlayerModel: ObservableObject {
-    @Published var position: Double = 0
-    @Published var duration: Double = 0
+    let clock = PlaybackClock()
+    var position: Double {
+        get { clock.position }
+        set { if clock.position != newValue { clock.position = newValue } }
+    }
+    var duration: Double {
+        get { clock.duration }
+        set { if clock.duration != newValue { clock.duration = newValue } }
+    }
     @Published var paused: Bool = false
     @Published var ready: Bool = false
     /// True only after the decoder clock is actually advancing. `ready` may be
@@ -86,8 +101,7 @@ final class PlayerModel: ObservableObject {
     var timeText: String { Self.fmt(position) }
     var remainingText: String { "-" + Self.fmt(max(0, duration - position)) }
     var progress: Double {
-        guard duration.isFinite, position.isFinite, duration > 0 else { return 0 }
-        return min(1, max(0, position / duration))
+        PlaybackPresentation.progress(position: position, duration: duration)
     }
 
     static func fmt(_ s: Double) -> String {

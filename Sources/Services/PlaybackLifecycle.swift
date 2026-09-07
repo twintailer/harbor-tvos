@@ -66,3 +66,20 @@ enum PlaybackControl: Hashable {
         }
     }
 }
+
+enum PlaybackPresentation {
+    static func progress(position: Double, duration: Double) -> Double {
+        guard position.isFinite, duration.isFinite, duration > 0 else { return 0 }
+        return min(1, max(0, position / duration))
+    }
+
+    static func shouldShowUpNext(position: Double, duration: Double,
+                                 leadSeconds: Int, hasNextEpisode: Bool) -> Bool {
+        guard hasNextEpisode, leadSeconds != 0,
+              position.isFinite, duration.isFinite, duration > 0, position > 0 else { return false }
+        // Clamp BEFORE converting to Int: malformed media durations must not trap.
+        let automatic = max(25, min(90, duration * 0.045))
+        let lead = leadSeconds < 0 ? automatic.rounded(.down) : Double(leadSeconds)
+        return duration - position <= lead
+    }
+}

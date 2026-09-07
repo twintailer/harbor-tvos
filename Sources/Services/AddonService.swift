@@ -4,8 +4,10 @@ import Foundation
 // they configured in Stremio), not hard-coded Cinemeta. Falls back to Cinemeta
 // when signed out.
 enum AddonService {
+    static func purgeCatalogCache() async { await AddonCatalogCache.shared.purge() }
     // Home rows built from every catalog the user's addons expose.
     static func homeRows(addons: [Addon]) async -> [CatalogRow] {
+        guard !Task.isCancelled else { return [] }
         let catalogAddons = addons.filter { !($0.manifest?.catalogs ?? []).isEmpty }
         if catalogAddons.isEmpty {
             return await CinemetaRows()
@@ -19,27 +21,20 @@ enum AddonService {
                                  cat.name ?? "\(cat.type.capitalized) · \(cat.id)"))
             }
         }
-        var indexedRows: [(Int, CatalogRow)] = []
-        await withTaskGroup(of: (Int, CatalogRow?).self) { group in
-            for request in requests {
-                group.addTask {
-                    let items = await catalog(base: request.base, type: request.type, id: request.id)
-                    let source = CatalogPageSource(base: request.base, type: request.type,
-                                                   catalogID: request.id)
-                    let row = items.isEmpty ? nil : CatalogRow(title: request.title, items: items,
-                                                               source: source)
-                    return (request.index, row)
-                }
-            }
-            for await (index, row) in group {
-                if let row { indexedRows.append((index, row)) }
-            }
+        let rows: [CatalogRow] = await limitedMap(requests) { request -> CatalogRow? in
+            let items = await catalog(base: request.base, type: request.type, id: request.id)
+            guard !Task.isCancelled, !items.isEmpty else { return nil }
+            let source = CatalogPageSource(base: request.base, type: request.type,
+                                           catalogID: request.id)
+            return CatalogRow(title: request.title, items: items, source: source)
         }
-        let rows = indexedRows.sorted { $0.0 < $1.0 }.map { $0.1 }
+        .compactMap { $0 }
+        guard !Task.isCancelled else { return [] }
         return rows.isEmpty ? await CinemetaRows() : rows
     }
 
     private static func CinemetaRows() async -> [CatalogRow] {
+        guard !Task.isCancelled else { return [] }
         async let m = catalog(base: CatalogService.cinemeta, type: "movie", id: "top")
         async let s = catalog(base: CatalogService.cinemeta, type: "series", id: "top")
         return [
@@ -54,6 +49,7 @@ enum AddonService {
 
     static func catalog(base: String, type: String, id: String, genre: String? = nil,
                         skip: Int = 0) async -> [MetaItem] {
+        guard !Task.isCancelled else { return [] }
         var path = "\(base)/catalog/\(type)/\(id)"
         var extras: [String] = []
         if let genre, !genre.isEmpty,
@@ -64,10 +60,13 @@ enum AddonService {
         if !extras.isEmpty { path += "/" + extras.joined(separator: "&") }
         path += ".json"
         guard let url = URL(string: path) else { return [] }
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            return (try JSONDecoder().decode(CatalogResponse.self, from: data)).metas ?? []
-        } catch { return [] }
+        if let cached = await AddonCatalogCache.shared.items(for: path) { return cached }
+        guard let data = await responseData(url: url), !Task.isCancelled,
+              let response = try? JSONDecoder().decode(CatalogResponse.self, from: data)
+        else { return [] }
+        let items = response.metas ?? []
+        if !Task.isCancelled { await AddonCatalogCache.shared.store(items, for: path) }
+        return Task.isCancelled ? [] : items
     }
 
     static func catalog(source: CatalogPageSource, skip: Int) async -> [MetaItem] {
@@ -78,23 +77,27 @@ enum AddonService {
     // Prefer a user meta-addon that actually serves this id (matching id-prefix), then any other
     // meta addon, then Cinemeta. This is what makes the user's own metadata addon win over Cinemeta.
     static func meta(addons: [Addon], type: String, id: String) async -> MetaItem? {
+        guard !Task.isCancelled else { return nil }
         let matching = addons.filter { $0.servesMeta(type: type, id: id) }
         let matchingBases = Set(matching.map { $0.base })
         let otherMeta = addons.filter { $0.hasMeta && !matchingBases.contains($0.base) }
         for addon in matching {
+            guard !Task.isCancelled else { return nil }
             if let m = await metaFrom(base: addon.base, type: type, id: id) { return m }
         }
         for addon in otherMeta {
+            guard !Task.isCancelled else { return nil }
             if let m = await metaFrom(base: addon.base, type: type, id: id) { return m }
         }
+        guard !Task.isCancelled else { return nil }
         return await metaFrom(base: CatalogService.cinemeta, type: type, id: id)
     }
 
     static func search(addons: [Addon], query: String) async -> [MetaItem] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return [] }
+        guard !trimmed.isEmpty, !Task.isCancelled else { return [] }
         var pathCharacters = CharacterSet.urlPathAllowed
-        pathCharacters.remove(charactersIn: "/?#")
+        pathCharacters.remove(charactersIn: "/?#&=+")
         let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: pathCharacters) ?? trimmed
         let sources = addons.flatMap { addon in
             (addon.manifest?.catalogs ?? []).filter {
@@ -103,21 +106,17 @@ enum AddonService {
             }.prefix(8).map { (addon.base, $0.type, $0.id) }
         }
         guard !sources.isEmpty else { return await CatalogService.search(query: trimmed) }
-        var combined: [MetaItem] = []
-        await withTaskGroup(of: [MetaItem].self) { group in
-            for (base, type, id) in sources {
-                group.addTask {
-                    guard let url = URL(string: "\(base)/catalog/\(type)/\(id)/search=\(encoded).json"),
-                          let (data, _) = try? await URLSession.shared.data(from: url),
-                          let response = try? JSONDecoder().decode(CatalogResponse.self, from: data)
-                    else { return [] }
-                    return response.metas ?? []
-                }
-            }
-            for await result in group { combined.append(contentsOf: result) }
+        let results: [[MetaItem]] = await limitedMap(sources) { base, type, id in
+            guard !Task.isCancelled,
+                  let url = URL(string: "\(base)/catalog/\(type)/\(id)/search=\(encoded).json"),
+                  let data = await responseData(url: url), !Task.isCancelled,
+                  let response = try? JSONDecoder().decode(CatalogResponse.self, from: data)
+            else { return [] }
+            return response.metas ?? []
         }
+        guard !Task.isCancelled else { return [] }
         var seen = Set<String>()
-        let unique = combined.filter {
+        let unique = results.flatMap { $0 }.filter {
             isRelevantSearchResult($0, query: trimmed)
                 && seen.insert("\($0.type):\($0.id)").inserted
         }
@@ -133,11 +132,89 @@ enum AddonService {
     }
 
     private static func metaFrom(base: String, type: String, id: String) async -> MetaItem? {
-        guard let url = URL(string: "\(base)/meta/\(type)/\(id).json") else { return nil }
+        guard !Task.isCancelled,
+              let url = URL(string: "\(base)/meta/\(type)/\(id).json"),
+              let data = await responseData(url: url), !Task.isCancelled else { return nil }
+        return (try? JSONDecoder().decode(MetaResponse.self, from: data))?.meta
+    }
+
+    private static func responseData(url: URL) async -> Data? {
+        guard !Task.isCancelled else { return nil }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 15
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            return (try JSONDecoder().decode(MetaResponse.self, from: data)).meta
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard !Task.isCancelled, let http = response as? HTTPURLResponse,
+                  (200..<300).contains(http.statusCode) else { return nil }
+            return data
         } catch { return nil }
+    }
+
+    /// Rolling window rather than one task for every catalog. Results retain
+    /// add-on priority, independent of which provider happens to respond first.
+    private static func limitedMap<Input, Output>(_ inputs: [Input],
+        operation: @escaping @Sendable (Input) async -> Output) async -> [Output] {
+        guard !Task.isCancelled else { return [] }
+        return await withTaskGroup(of: (Int, Output).self) { group in
+            var next = 0
+            var results: [(Int, Output)] = []
+            for _ in 0..<min(4, inputs.count) {
+                let index = next
+                next += 1
+                group.addTask { (index, await operation(inputs[index])) }
+            }
+            for await result in group {
+                guard !Task.isCancelled else { group.cancelAll(); break }
+                results.append(result)
+                if next < inputs.count {
+                    let index = next
+                    next += 1
+                    group.addTask { (index, await operation(inputs[index])) }
+                }
+            }
+            return Task.isCancelled ? [] : results.sorted { $0.0 < $1.0 }.map { $0.1 }
+        }
+    }
+}
+
+/// Short-lived decoded pages make Home → Catalogs → Home reuse recent work.
+/// Never persist configured add-on URLs or cache failures/empty pages.
+private actor AddonCatalogCache {
+    static let shared = AddonCatalogCache()
+    private struct Entry {
+        let items: [MetaItem]
+        let expires: TimeInterval
+        var accessed: TimeInterval
+    }
+    private var entries: [String: Entry] = [:]
+    private var itemCount = 0
+
+    func purge() { entries.removeAll(); itemCount = 0 }
+
+    func items(for key: String) -> [MetaItem]? {
+        guard var entry = entries[key] else { return nil }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard entry.expires > now else { remove(key); return nil }
+        entry.accessed = now
+        entries[key] = entry
+        return entry.items
+    }
+
+    func store(_ items: [MetaItem], for key: String) {
+        guard !items.isEmpty, items.count <= 1000 else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        for expired in entries.filter({ $0.value.expires <= now }).map(\.key) { remove(expired) }
+        remove(key)
+        entries[key] = Entry(items: items, expires: now + 60, accessed: now)
+        itemCount += items.count
+        while entries.count > 32 || itemCount > 3000 {
+            guard let oldest = entries.min(by: { $0.value.accessed < $1.value.accessed })?.key else { break }
+            remove(oldest)
+        }
+    }
+
+    private func remove(_ key: String) {
+        if let removed = entries.removeValue(forKey: key) { itemCount -= removed.items.count }
     }
 }
 
@@ -150,6 +227,7 @@ struct CwItem: Identifiable {
     let season: Int?
     let episode: Int?
     let progress: Double
+    var remainingSeconds: Double? = nil
 }
 
 extension StremioService {
@@ -189,7 +267,8 @@ extension StremioService {
         }
         /// 0…1 watched fraction for the progress bar.
         var progressRatio: Double {
-            guard let off = state?.timeOffset, let d = state?.duration, d > 0 else { return 0 }
+            guard let off = state?.timeOffset, let d = state?.duration,
+                  off.isFinite, d.isFinite, d > 0 else { return 0 }
             return min(1, max(0, off / d))
         }
         var asMeta: MetaItem {
@@ -215,7 +294,14 @@ extension StremioService {
             return CwItem(meta: asMeta,
                           season: (type ?? "") == "movie" ? nil : se?.season,
                           episode: (type ?? "") == "movie" ? nil : se?.episode,
-                          progress: progressRatio)
+                          progress: progressRatio,
+                          remainingSeconds: remainingSeconds)
+        }
+
+        private var remainingSeconds: Double? {
+            guard let duration = state?.duration, let offset = state?.timeOffset,
+                  duration.isFinite, offset.isFinite, duration > 0 else { return nil }
+            return max(0, duration - offset) / 1000
         }
     }
 

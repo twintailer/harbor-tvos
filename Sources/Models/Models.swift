@@ -14,6 +14,12 @@ struct MetaItem: Codable, Identifiable, Hashable {
     let genres: [String]?
     let runtime: String?
     let videos: [Video]?
+    var contentKey: String { "\(type):\(id)" }
+
+    static func unique(_ items: [MetaItem], excluding existing: [MetaItem] = []) -> [MetaItem] {
+        var seen = Set(existing.map(\.contentKey))
+        return items.filter { seen.insert($0.contentKey).inserted }
+    }
 
     // Tolerant decoding: addons disagree on field names — Cinemeta-style uses
     // title/episode, TMDB-style meta addons use name/number, and some emit numbers

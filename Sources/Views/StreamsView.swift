@@ -5,6 +5,7 @@ struct StreamsView: View {
     let title: String
     let streams: [StreamOption]
     let onPick: (StreamOption) -> Void
+    @Environment(\.dismiss) private var dismiss
     @AppStorage(SubtitleStyle.Key.fullStreamDescription) private var fullDescription = true
     @AppStorage(SubtitleStyle.Key.pickerShowFilename) private var showFilename = false
 
@@ -68,6 +69,7 @@ struct StreamsView: View {
                 .padding(.vertical, 42)
             }
             .background(HarborStageBackground())
+            .onExitCommand { dismiss() }
         }
     }
 }

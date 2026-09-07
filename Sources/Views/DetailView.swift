@@ -24,6 +24,7 @@ struct DetailView: View {
     @State private var pickedStreamAfterDismiss: StreamOption?
     @State private var resolutionTask: Task<Void, Never>?
     @State private var requestGate = PlaybackRequestGate()
+    @FocusState private var cancelFocused: Bool
     @Environment(\.dismiss) private var dismiss
     @AppStorage(SubtitleStyle.Key.instantPlay) private var instantPlay = true
     @AppStorage(SubtitleStyle.Key.rememberStream) private var rememberStream = true
@@ -176,6 +177,8 @@ struct DetailView: View {
                 .padding(.horizontal, 80)
                 .padding(.bottom, 100)
             }
+            .disabled(resolving)
+            .accessibilityHidden(resolving)
             if resolving {
                 ZStack {
                     Color.black.opacity(0.72).ignoresSafeArea()
@@ -188,6 +191,7 @@ struct DetailView: View {
                             .lineLimit(2).multilineTextAlignment(.center)
                         Button("Cancel") { cancelResolution() }
                             .buttonStyle(HarborActionButtonStyle(tone: .secondary))
+                            .focused($cancelFocused)
                     }
                     .padding(40).frame(maxWidth: 780)
                     .background(HarborTVDesign.elevated, in: RoundedRectangle(cornerRadius: 24))
@@ -195,6 +199,7 @@ struct DetailView: View {
                 .onExitCommand { cancelResolution() }
             }
         }
+        .onChange(of: resolving) { _, active in cancelFocused = active }
         .fullScreenCover(item: $player, onDismiss: playerDidDismiss) { target in
             PlayerView(target: target)
         }
@@ -432,18 +437,7 @@ struct DetailView: View {
     }
 
     private func nextEpisode(after video: MetaItem.Video) -> MetaItem.Video? {
-        guard let videos = meta.videos, let season = video.season, let episode = video.episode else { return nil }
-        let ordered = videos
-            .filter { ($0.season ?? 0) > 0 && ($0.episode ?? 0) > 0 }
-            .sorted {
-                let leftSeason = $0.season ?? 0
-                let rightSeason = $1.season ?? 0
-                if leftSeason != rightSeason { return leftSeason < rightSeason }
-                return ($0.episode ?? 0) < ($1.episode ?? 0)
-            }
-        guard let index = ordered.firstIndex(where: { $0.season == season && $0.episode == episode }),
-              ordered.indices.contains(index + 1) else { return nil }
-        return ordered[index + 1]
+        EpisodeOrder.next(after: video, in: meta.videos ?? [])
     }
 
     // MARK: - Season selection + per-episode watched state

@@ -33,7 +33,7 @@ struct SearchView: View {
                                          message: "Check the spelling or try a shorter title.")
                     } else {
                         LazyVGrid(columns: columns, spacing: 40) {
-                            ForEach(results) { item in
+                            ForEach(results, id: \.contentKey) { item in
                                 PosterCard(item: item, width: 205)
                             }
                         }

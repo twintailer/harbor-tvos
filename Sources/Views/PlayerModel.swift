@@ -85,7 +85,10 @@ final class PlayerModel: ObservableObject {
 
     var timeText: String { Self.fmt(position) }
     var remainingText: String { "-" + Self.fmt(max(0, duration - position)) }
-    var progress: Double { duration > 0 ? min(1, position / duration) : 0 }
+    var progress: Double {
+        guard duration.isFinite, position.isFinite, duration > 0 else { return 0 }
+        return min(1, max(0, position / duration))
+    }
 
     static func fmt(_ s: Double) -> String {
         guard s.isFinite, s >= 0, s < Double(Int.max) else { return "0:00" }

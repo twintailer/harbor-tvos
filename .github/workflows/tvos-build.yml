@@ -39,6 +39,7 @@ jobs:
         run: |
           swiftc -swift-version 5 -parse-as-library \
             Sources/Services/PlaybackLifecycle.swift Sources/Models/PlaybackTypes.swift \
+            Sources/Models/Models.swift Sources/Services/EpisodeOrder.swift \
             Sources/Views/PlayerModel.swift Tests/PlaybackLifecycleTests.swift \
             -o /tmp/harbor-playback-tests
           /tmp/harbor-playback-tests

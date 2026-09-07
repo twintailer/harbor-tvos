@@ -227,7 +227,7 @@ struct CatalogRowView: View {
 
     init(row: CatalogRow) {
         self.row = row
-        _loadedItems = State(initialValue: row.items)
+        _loadedItems = State(initialValue: MetaItem.unique(row.items))
         _nextSkip = State(initialValue: row.items.count)
         _hasMore = State(initialValue: row.source != nil && !row.items.isEmpty)
     }
@@ -254,8 +254,13 @@ struct CatalogRowView: View {
                 .padding(.horizontal, 60)
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: 26) {
-                    ForEach(visibleItems) { item in
+                    ForEach(visibleItems, id: \.contentKey) { item in
                         HarborLandscapeCard(item: item)
+                            .onAppear {
+                                if item.contentKey == visibleItems.suffix(4).first?.contentKey {
+                                    Task { await loadMore() }
+                                }
+                            }
                     }
                     if hasMore, row.source != nil {
                         Button {
@@ -285,8 +290,7 @@ struct CatalogRowView: View {
         loadingMore = true
         let page = await AddonService.catalog(source: source, skip: nextSkip)
         guard !Task.isCancelled else { loadingMore = false; return }
-        let existing = Set(loadedItems.map { "\($0.type):\($0.id)" })
-        let fresh = page.filter { !existing.contains("\($0.type):\($0.id)") }
+        let fresh = MetaItem.unique(page, excluding: loadedItems)
         nextSkip += page.count
         if page.isEmpty || fresh.isEmpty {
             hasMore = false

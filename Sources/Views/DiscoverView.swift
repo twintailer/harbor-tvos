@@ -9,6 +9,10 @@ struct DiscoverView: View {
     @State private var hasMore = false
     @State private var nextSkip = 0
     @State private var pageSource: CatalogPageSource?
+    @State private var requests = PlaybackRequestGate()
+    @State private var loadedFilter = ""
+    @State private var pageGeneration = UUID()
+    private var filterKey: String { "\(type)-\(genre)-\(addonRevision)" }
 
     private let genres = ["", "Action", "Comedy", "Drama", "Thriller", "Sci-Fi", "Horror", "Animation"]
     @State private var genre = ""
@@ -45,8 +49,13 @@ struct DiscoverView: View {
                     if loading { ProgressView().padding(.horizontal, 60) }
 
                     LazyVGrid(columns: columns, spacing: 40) {
-                        ForEach(items) { item in
+                        ForEach(items, id: \.contentKey) { item in
                             PosterCard(item: item, width: 205)
+                                .onAppear {
+                                    if item.contentKey == items.suffix(12).first?.contentKey {
+                                        Task { await loadMore() }
+                                    }
+                                }
                         }
                     }
                     .padding(.horizontal, 60)
@@ -58,9 +67,9 @@ struct DiscoverView: View {
                     }
 
                     if hasMore {
-                        HStack { Spacer(); ProgressView().controlSize(.large); Spacer() }
-                            .frame(height: 100)
-                            .task { await loadMore() }
+                        Button(loadingMore ? "Loading…" : "Load more titles") { Task { await loadMore() } }
+                            .buttonStyle(HarborActionButtonStyle(tone: .secondary))
+                            .frame(maxWidth: .infinity).padding(.vertical, 18)
                     }
                 }
                 .padding(.bottom, 60)
@@ -69,7 +78,7 @@ struct DiscoverView: View {
             .onExitCommand(perform: onRootBack)
             .navigationDestination(for: MetaItem.self) { DetailView(item: $0) }
         }
-        .task(id: "\(type)-\(genre)-\(addonRevision)") { await load() }
+        .task(id: filterKey) { if loadedFilter != filterKey { await load() } }
     }
 
     @EnvironmentObject private var auth: AuthStore
@@ -79,6 +88,9 @@ struct DiscoverView: View {
     }
 
     private func load() async {
+        let requestID = requests.begin()
+        let requestedFilter = filterKey
+        pageGeneration = UUID()
         loading = true
         loadingMore = false
         hasMore = false
@@ -105,19 +117,25 @@ struct DiscoverView: View {
                                        catalogID: "top", genre: genre)
             result = await AddonService.catalog(source: source, skip: 0)
         }
+        guard !Task.isCancelled, requests.accepts(requestID), filterKey == requestedFilter else { return }
         pageSource = source
-        items = result
+        items = MetaItem.unique(result)
         nextSkip = result.count
         hasMore = !result.isEmpty
         loading = false
+        loadedFilter = requestedFilter
     }
 
     private func loadMore() async {
         guard !loadingMore, hasMore, let pageSource else { return }
+        let requestedFilter = filterKey
+        let generation = pageGeneration
         loadingMore = true
+        defer { if generation == pageGeneration { loadingMore = false } }
         let page = await AddonService.catalog(source: pageSource, skip: nextSkip)
-        let existing = Set(items.map { "\($0.type):\($0.id)" })
-        let fresh = page.filter { !existing.contains("\($0.type):\($0.id)") }
+        guard !Task.isCancelled, generation == pageGeneration,
+              filterKey == requestedFilter, self.pageSource == pageSource else { return }
+        let fresh = MetaItem.unique(page, excluding: items)
         nextSkip += page.count
         if page.isEmpty || fresh.isEmpty { hasMore = false }
         else { items.append(contentsOf: fresh) }

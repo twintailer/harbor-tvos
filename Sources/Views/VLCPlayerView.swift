@@ -208,6 +208,7 @@ private final class HarborVLCEngine: NSObject {
     private var lastTimeEmission = 0.0
     private var stopCompletion: (@MainActor () -> Void)?
     private var loaded = false
+    private var stopRequestedAt = Double.infinity
 
     override init() {
         super.init()
@@ -242,12 +243,14 @@ private final class HarborVLCEngine: NSObject {
     func stop(completion: @escaping @MainActor () -> Void) {
         guard loaded else { player.delegate = nil; player.drawable = nil; completion(); return }
         stopCompletion = completion
+        stopRequestedAt = ProcessInfo.processInfo.systemUptime
         player.stop()
     }
 
     @MainActor
-    private func didStop() {
-        guard let completion = stopCompletion else { return }
+    private func didStop(observedAt: Double) {
+        guard observedAt >= stopRequestedAt, player.state == .stopped,
+              let completion = stopCompletion else { return }
         stopCompletion = nil
         player.delegate = nil
         player.drawable = nil
@@ -298,6 +301,7 @@ private final class HarborVLCEngine: NSObject {
 
 extension HarborVLCEngine: VLCMediaPlayerDelegate {
     func mediaPlayerStateChanged(_ notification: Notification) {
+        let observedAt = ProcessInfo.processInfo.systemUptime
         let state = player.state
         let playing = player.isPlaying
         let buffering = state == .buffering || state == .opening
@@ -305,7 +309,7 @@ extension HarborVLCEngine: VLCMediaPlayerDelegate {
         let errored = state == .error
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            if state == .stopped { self.didStop() }
+            if state == .stopped { self.didStop(observedAt: observedAt) }
             self.onState?(playing, buffering, ended, errored)
         }
     }

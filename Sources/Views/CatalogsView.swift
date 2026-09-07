@@ -31,7 +31,9 @@ struct CatalogsView: View {
         }
         .task(id: "\(addonRevision)-\(showAllRows)") {
             loading = true
-            rows = await AddonService.homeRows(addons: auth.addons)
+            let result = await AddonService.homeRows(addons: auth.addons)
+            guard !Task.isCancelled else { return }
+            rows = result
             loading = false
         }
     }
@@ -53,6 +55,8 @@ struct MediaBrowseView: View {
     @State private var hasMore = false
     @State private var nextSkip = 0
     @State private var pageSource: CatalogPageSource?
+    @State private var loadedRevision: String?
+    @State private var pageGeneration = UUID()
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 40), count: 6)
 
@@ -71,16 +75,19 @@ struct MediaBrowseView: View {
                                          message: "Install a compatible catalog add-on in Stremio.")
                     } else {
                         LazyVGrid(columns: columns, spacing: 40) {
-                            ForEach(items) { PosterCard(item: $0, width: 205) }
+                            ForEach(items, id: \.contentKey) { item in
+                                PosterCard(item: item, width: 205)
+                                    .onAppear {
+                                        if item.contentKey == items.suffix(12).first?.contentKey {
+                                            Task { await loadMore() }
+                                        }
+                                    }
+                            }
                         }
                         if hasMore {
-                            HStack {
-                                Spacer()
-                                ProgressView().controlSize(.large)
-                                Spacer()
-                            }
-                            .frame(height: 100)
-                            .task { await loadMore() }
+                            Button(loadingMore ? "Loading…" : "Load more titles") { Task { await loadMore() } }
+                                .buttonStyle(HarborActionButtonStyle(tone: .secondary))
+                                .frame(maxWidth: .infinity).padding(.vertical, 18)
                         }
                     }
                 }
@@ -90,10 +97,12 @@ struct MediaBrowseView: View {
             .onExitCommand(perform: onRootBack)
             .navigationDestination(for: MetaItem.self) { DetailView(item: $0) }
         }
-        .task(id: addonRevision) { await load() }
+        .task(id: addonRevision) { if loadedRevision != addonRevision { await load() } }
     }
 
     private func load() async {
+        let requestedRevision = addonRevision
+        pageGeneration = UUID()
         loading = true
         loadingMore = false
         hasMore = false
@@ -103,22 +112,26 @@ struct MediaBrowseView: View {
             (addon.manifest?.catalogs ?? []).filter { $0.type == type }.map { (addon, $0) }
         }
         var source: CatalogPageSource
+        var result: [MetaItem]
         if let first = candidates.first {
             source = CatalogPageSource(base: first.0.base, type: first.1.type,
                                        catalogID: first.1.id)
-            items = await AddonService.catalog(source: source, skip: 0)
-            if items.isEmpty {
+            result = await AddonService.catalog(source: source, skip: 0)
+            if result.isEmpty {
                 source = fallbackSource
-                items = await AddonService.catalog(source: source, skip: 0)
+                result = await AddonService.catalog(source: source, skip: 0)
             }
         } else {
             source = fallbackSource
-            items = await AddonService.catalog(source: source, skip: 0)
+            result = await AddonService.catalog(source: source, skip: 0)
         }
+        guard !Task.isCancelled, requestedRevision == addonRevision else { return }
+        items = MetaItem.unique(result)
         pageSource = source
-        nextSkip = items.count
-        hasMore = !items.isEmpty
+        nextSkip = result.count
+        hasMore = !result.isEmpty
         loading = false
+        loadedRevision = requestedRevision
     }
 
     private var addonRevision: String {
@@ -143,10 +156,14 @@ struct MediaBrowseView: View {
 
     private func loadMore() async {
         guard !loadingMore, hasMore, let pageSource else { return }
+        let requestedRevision = addonRevision
+        let generation = pageGeneration
         loadingMore = true
+        defer { if generation == pageGeneration { loadingMore = false } }
         let page = await AddonService.catalog(source: pageSource, skip: nextSkip)
-        let existing = Set(items.map { "\($0.type):\($0.id)" })
-        let fresh = page.filter { !existing.contains("\($0.type):\($0.id)") }
+        guard !Task.isCancelled, generation == pageGeneration,
+              requestedRevision == addonRevision, self.pageSource == pageSource else { return }
+        let fresh = MetaItem.unique(page, excluding: items)
         nextSkip += page.count
         if page.isEmpty || fresh.isEmpty { hasMore = false }
         else { items.append(contentsOf: fresh) }

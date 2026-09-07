@@ -88,8 +88,45 @@ struct PlaybackLifecycleTests {
 
         expect(PlayerModel.fmt(.nan) == "0:00", "NaN clock is safe")
         expect(PlayerModel.fmt(.infinity) == "0:00", "Infinite clock is safe")
+        expect(PlayerModel.fmt(Double.greatestFiniteMagnitude) == "0:00", "Overflow clock is safe")
         expect(PlayerModel.fmt(-10) == "0:00", "Negative clock is safe")
         expect(PlayerModel.fmt(3661) == "1:01:01", "Long video clock formatting")
+        model.duration = 60
+        model.position = .nan
+        expect(model.progress == 0, "Malformed progress cannot create a NaN frame")
+        model.position = -5
+        expect(model.progress == 0, "Negative progress cannot create a negative frame")
+        model.position = 90
+        expect(model.progress == 1, "Overshoot is clamped")
+
+        func episode(_ season: Int, _ number: Int) -> MetaItem.Video {
+            .init(id: "\(season):\(number)", title: nil, season: season, episode: number,
+                  thumbnail: nil, overview: nil, released: nil)
+        }
+        let e1 = episode(1, 1), e2 = episode(1, 2), s2 = episode(2, 1)
+        expect(EpisodeOrder.next(after: e1, in: [s2, e1, e1, e2]) == e2,
+               "Unsorted and duplicated metadata advances exactly one episode")
+        expect(EpisodeOrder.next(after: e2, in: [e1, s2, e2]) == s2,
+               "Next crosses season boundary")
+        expect(EpisodeOrder.next(after: s2, in: [s2, e1, e2]) == nil,
+               "Last episode has no next target")
+        expect(EpisodeOrder.next(after: e1, in: [episode(0, 100), s2]) == s2,
+               "Specials do not interrupt regular episode succession")
+        expect(EpisodeOrder.next(after: e1, in: []) == nil, "Empty episode list is safe")
+        let malformed = Data(#"{"id":"bad","season":1e100,"episode":1}"#.utf8)
+        let decoded = try? JSONDecoder().decode(MetaItem.Video.self, from: malformed)
+        expect(decoded != nil && decoded?.season == nil, "Out-of-range addon numbers cannot crash decoding")
+        func meta(_ type: String, _ id: String) -> MetaItem {
+            .init(id: id, type: type, name: id, poster: nil, background: nil,
+                  description: nil, releaseInfo: nil, imdbRating: nil,
+                  genres: nil, runtime: nil, videos: nil)
+        }
+        let movie = meta("movie", "42"), series = meta("series", "42")
+        expect(MetaItem.unique([movie, movie, series]).count == 2,
+               "Catalog focus identities distinguish movie and series")
+        expect(MetaItem.unique([movie, series, series], excluding: [movie]) == [series],
+               "Pagination removes duplicates within and across pages")
+        expect(MetaItem.unique([]).isEmpty, "Empty catalog page is safe")
         print("PASS: \(checks) playback lifecycle, stale-response, audio-ownership and remote-navigation checks")
     }
 }

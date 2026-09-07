@@ -676,8 +676,7 @@ struct PlayerView: View {
 
     // MARK: - Options panel
 
-    private struct OptionRow: Identifiable {
-        let id = UUID()
+    private struct OptionRow {
         let label: String
         var detail: String = ""
         var isSelected: Bool = false

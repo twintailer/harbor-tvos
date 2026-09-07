@@ -12,6 +12,25 @@ final class AuthStore: ObservableObject {
 
     private let keyAuth = "harbor.stremio.authKey"
     private let keyEmail = "harbor.stremio.email"
+    private var playbackSaveTask: Task<Void, Never>?
+
+    func savePlaybackProgress(meta: MetaItem, videoId: String, season: Int?, episode: Int?,
+                              position: Double, duration: Double, existing: StremioService.LibraryItem?) {
+        guard let key = authKey else { return }
+        let previous = playbackSaveTask
+        playbackSaveTask = Task {
+            await previous?.value
+            guard authKey == key else { return }
+            await StremioService.saveProgress(authKey: key, meta: meta, videoId: videoId,
+                season: season, episode: episode, position: position, duration: duration, existing: existing)
+        }
+    }
+
+    func refreshAfterPlayback() async {
+        await playbackSaveTask?.value
+        await loadLibrary()
+        await loadContinueWatching()
+    }
 
     init() {
         let secureToken = SecureStore.read(keyAuth)
@@ -28,12 +47,15 @@ final class AuthStore: ObservableObject {
     func loadContinueWatching() async {
         guard let authKey else { return }
         let cw = await StremioService.continueWatching(authKey: authKey)
+        guard self.authKey == authKey else { return }
         continueWatching = cw.map { $0.asCwItem }
     }
 
     func loadLibrary() async {
         guard let authKey else { libraryItems = []; return }
-        libraryItems = await StremioService.library(authKey: authKey)
+        let items = await StremioService.library(authKey: authKey)
+        guard self.authKey == authKey else { return }
+        libraryItems = items
     }
 
     func clearContinueWatching(_ id: String) async {

@@ -25,6 +25,9 @@ struct HarborTVApp: App {
     var body: some Scene {
         WindowGroup {
             RootView().environmentObject(auth)
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+                    Task { await HarborArtworkCache.shared.purge() }
+                }
         }
     }
 }
@@ -34,6 +37,7 @@ struct RootView: View {
     @AppStorage(SubtitleStyle.Key.interfaceStyle) private var interfaceStyle = "harbor"
     @State private var selection: HarborSection = .home
     @State private var sidebarEnabled = false
+    @State private var sidebarTask: Task<Void, Never>?
     @FocusState private var sidebarFocus: HarborSection?
 
     private var sidebarExpanded: Bool { sidebarFocus != nil }
@@ -73,6 +77,7 @@ struct RootView: View {
                 // same focus hand-off used by Orivio and prevents the rail from
                 // opening before a row has rendered.
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard !Task.isCancelled else { return }
                 sidebarEnabled = true
             }
         }
@@ -82,6 +87,7 @@ struct RootView: View {
     }
 
     private func openSidebar() {
+        sidebarTask?.cancel()
         sidebarEnabled = true
         sidebarFocus = selection
     }
@@ -101,8 +107,10 @@ struct RootView: View {
     }
 
     private func scheduleSidebarReenable() {
-        Task { @MainActor in
+        sidebarTask?.cancel()
+        sidebarTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 450_000_000)
+            guard !Task.isCancelled else { return }
             sidebarEnabled = true
         }
     }

@@ -14,6 +14,7 @@ struct PlayerTarget: Identifiable {
     var onProgress: ((Double, Double) -> Void)? = nil
     var onEnded: (() -> Void)? = nil
     var onChangeSource: ((Double) -> Void)? = nil
+    var nextEpisodeTitle: String? = nil
 }
 
 /// Full-screen libmpv player for tvOS. ALL remote input is handled at the UIKit level by a focusable
@@ -67,6 +68,15 @@ struct PlayerView: View {
     @State private var loadWatchdog: Task<Void, Never>?
     @State private var attemptedEngines = Set<String>()
     @State private var fallbackNotice: String?
+    @State private var terminalError = false
+    @State private var transitionMessage: String?
+    @State private var isSwitching = false
+    @State private var isVisible = false
+    @State private var transitionTask: Task<Void, Never>?
+    @State private var introTask: Task<Void, Never>?
+    @State private var noticeTask: Task<Void, Never>?
+    @State private var trackRefreshTask: Task<Void, Never>?
+    @State private var pendingSubtitleTrackID: Int?
 
     // Scrub-to-seek
     @State private var scrubbing = false
@@ -124,7 +134,7 @@ struct PlayerView: View {
     @AppStorage(SubtitleStyle.Key.showAspectButton) private var showAspectButton = true
     @AppStorage(SubtitleStyle.Key.showAnimeButton) private var showAnimeButton = true
 
-    private enum Control: Hashable { case skip, upNext, restart, back, play, fwd, next, source, engine, audio, subs, aspect, speed, anime, scrub }
+    private typealias Control = PlaybackControl
     private enum PanelKind { case audio, subtitles, subtitleSettings, aspect, speed, engine, anime, debug }
     @State private var selected: Control = .play
     @State private var lastButton: Control = .play
@@ -137,10 +147,13 @@ struct PlayerView: View {
         HarborTVDesign.accent(interfaceStyle: interfaceStyle, fallback: accentID)
     }
     private var animeAvailable: Bool {
+        Self.hasAnimeShaders
+    }
+    private static let hasAnimeShaders: Bool = {
         let nested = Bundle.main.urls(forResourcesWithExtension: "glsl", subdirectory: "Anime4K") ?? []
         let root = Bundle.main.urls(forResourcesWithExtension: "glsl", subdirectory: nil) ?? []
         return Set(nested + root).count >= 17
-    }
+    }()
     private var shouldStartAnime4K: Bool {
         // Never attach the shader graph to movies or normal series. Applying a
         // 2x Anime4K graph to native 4K content can exhaust Apple TV GPU memory.
@@ -195,9 +208,17 @@ struct PlayerView: View {
             RemoteCatcher(onPress: { handlePress($0) }, onSwipe: { showControls() })
             RemoteMenuCatcher { handleBack() }
 
-            if !model.ready {
-                ProgressView().controlSize(.large).tint(accent)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if let transitionMessage {
+                playbackStatus(title: transitionMessage, subtitle: "Please wait a moment")
+                    .zIndex(30)
+            } else if terminalError {
+                playbackStatus(title: "This stream could not be played",
+                               subtitle: target.onChangeSource != nil
+                                ? "Press Select to choose another source · Back to return"
+                                : "Press Select to retry · Back to return", error: true)
+            } else if !model.playbackStarted || (model.buffering && !model.paused) {
+                playbackStatus(title: model.playbackStarted ? "Buffering…" : "Starting playback…",
+                               subtitle: engineDisplayName(activeEngine))
             }
             if let fallbackNotice {
                 VStack {
@@ -209,11 +230,11 @@ struct PlayerView: View {
                 }
                 .padding(.top, 48)
             }
-            if showInfo { controlBar }
-            if showOptions { optionsPanel }
-            if let segment = activeSkip, skipButtonVisible, showSkipButton, !showOptions {
+            if showInfo, transitionMessage == nil, !terminalError { controlBar }
+            if showOptions, transitionMessage == nil { optionsPanel }
+            if let segment = activeSkip, skipButtonVisible, showSkipButton, !showOptions, !handledEnd {
                 skipPill(segment)
-            } else if upNextActive, !showOptions {
+            } else if upNextActive, !showOptions, !handledEnd {
                 upNextPill
             }
             if model.anime4KActive && anime4KIndicator {
@@ -237,23 +258,29 @@ struct PlayerView: View {
             }
         }
         .onReceive(model.$ready) {
-            if $0 {
+            if $0, !handledEnd, !isSwitching {
                 if readyAt == .distantFuture { readyAt = Date() }
                 refreshTracksSoon()
                 loadIntroSkipIfNeeded()
             }
         }
         .onReceive(model.$playbackStarted) { started in
-            guard started else { return }
+            guard started, !handledEnd, !isSwitching else { return }
             loadWatchdog?.cancel()
             if fallbackNotice != nil {
-                Task { @MainActor in
+                noticeTask?.cancel()
+                noticeTask = Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 3_000_000_000)
-                    if model.playbackStarted { fallbackNotice = nil }
+                    if !Task.isCancelled, model.playbackStarted { fallbackNotice = nil }
                 }
             }
         }
+        .onReceive(model.$playbackError) { error in
+            guard error != nil, !handledEnd, !isSwitching, !terminalError else { return }
+            fallbackFromStalledEngine(activeEngine)
+        }
         .onReceive(model.$position) { position in
+            guard !handledEnd, !isSwitching else { return }
             maybeAutoSelectTracks()
             monitorAudioOutput()
             loadIntroSkipIfNeeded()
@@ -265,10 +292,11 @@ struct PlayerView: View {
             }
         }
         .onReceive(model.$ended) { ended in
-            guard ended else { return }
+            guard ended, !isSwitching else { return }
             finishPlayback(playNext: autoPlayNext, markCompleted: true)
         }
         .onAppear {
+            isVisible = true
             showInfo = true; selected = .play; scheduleHide()
             animeActive = shouldStartAnime4K
             let initialEngine = activeEngine
@@ -278,9 +306,10 @@ struct PlayerView: View {
             UIApplication.shared.isIdleTimerDisabled = true
         }
         .onDisappear {
-            hideTask?.cancel(); scrubCommit?.cancel(); skipHideTask?.cancel()
-            loadWatchdog?.cancel()
+            isVisible = false
+            cancelPlayerWork()
             if !handledEnd { target.onProgress?(model.position, model.duration) }
+            model.controller?.shutdown()
             UIApplication.shared.isIdleTimerDisabled = false
         }
     }
@@ -288,6 +317,14 @@ struct PlayerView: View {
     // MARK: - Remote handling
 
     private func handlePress(_ type: UIPress.PressType) {
+        guard !handledEnd, !isSwitching else { return }
+        if terminalError {
+            if type == .select {
+                if target.onChangeSource != nil { changeSource() }
+                else { switchEngine(to: activeEngine, retry: true) }
+            }
+            return
+        }
         if confirmingLeave {
             switch type {
             case .leftArrow:
@@ -315,7 +352,7 @@ struct PlayerView: View {
         if controlsHidden {
             switch type {
             case .playPause:
-                if activeSkip != nil, skipButtonVisible { performSkip() } else { toggle() }
+                toggle()
             case .select:
                 if activeSkip != nil, skipButtonVisible {
                     performSkip()
@@ -331,7 +368,7 @@ struct PlayerView: View {
         // Bar shown: 2D navigation.
         switch type {
         case .playPause:
-            if activeSkip != nil, skipButtonVisible { performSkip() } else { toggle() }
+            toggle()
         case .select: activate(selected)
         case .leftArrow: horizontal(-1)
         case .rightArrow: horizontal(1)
@@ -345,6 +382,8 @@ struct PlayerView: View {
     /// recognizer owns the press, so it cannot also fall through to tvOS and
     /// dismiss the player/app a second time.
     private func handleBack() {
+        guard !handledEnd else { return }
+        if terminalError || isSwitching { leavePlayback(); return }
         if confirmingLeave {
             cancelLeave()
             return
@@ -406,18 +445,9 @@ struct PlayerView: View {
     /// timeline, while UP from the timeline returns to play/pause.
     private func vertical(_ d: Int) {
         commitScrubIfNeeded()
-        switch selected {
-        case .scrub:
-            if d < 0 { selected = .play; lastButton = .play }
-        case .skip, .upNext:
-            if d > 0 { selected = .play; lastButton = .play }
-        default:
-            if d > 0 {
-                selected = .scrub
-            } else if d < 0, let action = visibleActionControl {
-                selected = action
-            }
-        }
+        if buttonRow.contains(selected) { lastButton = selected }
+        selected = Control.vertical(from: selected, direction: d, lastButton: lastButton,
+                                    buttons: buttonRow, action: visibleActionControl)
         flashControls()
     }
 
@@ -488,7 +518,7 @@ struct PlayerView: View {
 
                 HStack(alignment: .center, spacing: 16) {
                     HStack(spacing: 14) {
-                        if showRestartButton { ctrlButton(.restart, "stop.fill") }
+                        if showRestartButton { ctrlButton(.restart, "arrow.counterclockwise") }
                         if showSeekButtons { ctrlButton(.back, "gobackward.\(seekBackStep)") }
                         ctrlButton(.play, model.paused ? "play.fill" : "pause.fill", big: true)
                         if showSeekButtons { ctrlButton(.fwd, "goforward.\(seekForwardStep)") }
@@ -505,6 +535,16 @@ struct PlayerView: View {
                         if showAnimeButton { ctrlButton(.anime, "sparkles") }
                     }
                 }
+
+                HStack {
+                    Text(controlLabel(selected))
+                        .font(.system(size: 18, weight: .semibold))
+                    Spacer()
+                    Text(selected == .scrub ? "← → Seek · Select to confirm" : "↓ Timeline · Back to hide")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.55))
+                }
+                .foregroundStyle(.white.opacity(0.88))
 
                 scrubber
 
@@ -615,7 +655,9 @@ struct PlayerView: View {
                     Image(systemName: "forward.end.fill")
                     VStack(alignment: .leading, spacing: 1) {
                         Text("Up Next").font(.system(size: 17, weight: .medium))
-                        Text("Next Episode").font(.system(size: 23, weight: .bold))
+                        Text(target.nextEpisodeTitle ?? "Next Episode")
+                            .font(.system(size: 23, weight: .bold)).lineLimit(2)
+                            .frame(maxWidth: 490, alignment: .leading)
                     }
                 }
                 .foregroundStyle(focused ? .black : .white)
@@ -654,8 +696,7 @@ struct PlayerView: View {
             return rows
         case .subtitles:
             var rows = [OptionRow(label: "Off", isSelected: selectedSubtitleTrackID < 0) {
-                selectedSubtitleTrackID = -1
-                model.controller?.setSubtitleTrack(-1); refreshTracksSoon()
+                setSub(-1)
             }]
             rows += groupedTrackRows(subtitleTracks, selectedID: selectedSubtitleTrackID,
                                      showSubtitleDetails: true) { setSub($0) }
@@ -915,7 +956,7 @@ struct PlayerView: View {
                     ScrollViewReader { proxy in
                         ScrollView {
                             VStack(alignment: .leading, spacing: 3) {
-                                ForEach(Array(rows.enumerated()), id: \.element.id) { i, row in
+                                ForEach(Array(rows.enumerated()), id: \.offset) { i, row in
                                     if row.isHeader {
                                         Text(row.label.uppercased())
                                             .font(.system(size: 15, weight: .bold)).tracking(1.2)
@@ -1000,7 +1041,9 @@ struct PlayerView: View {
     }
     private func closePanel() {
         withAnimation { showOptions = false }
-        showInfo = true; selected = .play; scheduleHide()
+        showInfo = true
+        selected = buttonRow.contains(lastButton) ? lastButton : .play
+        scheduleHide()
     }
 
     private func setAudio(_ id: Int) {
@@ -1012,6 +1055,7 @@ struct PlayerView: View {
         refreshTracksSoon()
     }
     private func setSub(_ id: Int) {
+        pendingSubtitleTrackID = id
         selectedSubtitleTrackID = id
         model.controller?.setSubtitleTrack(id)
         refreshTracksSoon()
@@ -1020,8 +1064,8 @@ struct PlayerView: View {
     private func refreshTracks() {
         let freshAudio = model.controller?.tracks(ofType: "audio") ?? []
         let freshSubtitles = model.controller?.tracks(ofType: "sub") ?? []
-        audioTracks = freshAudio
-        subtitleTracks = freshSubtitles
+        if audioTracks != freshAudio { audioTracks = freshAudio }
+        if subtitleTracks != freshSubtitles { subtitleTracks = freshSubtitles }
         let actualAudio = freshAudio.first(where: \.selected)?.id
         if let pendingAudioTrackID {
             selectedAudioTrackID = pendingAudioTrackID
@@ -1029,12 +1073,23 @@ struct PlayerView: View {
         } else {
             selectedAudioTrackID = actualAudio
         }
-        selectedSubtitleTrackID = freshSubtitles.first(where: \.selected)?.id ?? -1
+        let actualSubtitle = freshSubtitles.first(where: \.selected)?.id ?? -1
+        if let pendingSubtitleTrackID {
+            selectedSubtitleTrackID = pendingSubtitleTrackID
+            if actualSubtitle == pendingSubtitleTrackID { self.pendingSubtitleTrackID = nil }
+        } else { selectedSubtitleTrackID = actualSubtitle }
         updateMediaSummary(model.controller?.mediaSummary())
     }
     private func refreshTracksSoon() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { refreshTracks() }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { refreshTracks() }
+        trackRefreshTask?.cancel()
+        trackRefreshTask = Task { @MainActor in
+            let delays: [UInt64] = [250_000_000, 900_000_000]
+            for delay in delays {
+                try? await Task.sleep(nanoseconds: delay)
+                guard !Task.isCancelled, !handledEnd, !isSwitching, isVisible else { return }
+                refreshTracks()
+            }
+        }
     }
 
     private func monitorAudioOutput() {
@@ -1176,55 +1231,62 @@ struct PlayerView: View {
     /// loop turn. Funnel both through one guarded transition, queue the parent's
     /// next-episode request before dismissing, and never present from the player.
     private func finishPlayback(playNext: Bool, markCompleted: Bool) {
-        guard !handledEnd else { return }
-        handledEnd = true
-        loadWatchdog?.cancel()
-        hideTask?.cancel()
-        scrubCommit?.cancel()
-        skipHideTask?.cancel()
-
         let position = markCompleted && model.duration > 0 ? model.duration : model.position
-        target.onProgress?(position, model.duration)
-        if playNext { target.onEnded?() }
-        dismiss()
+        exitPlayback(message: playNext && target.onEnded != nil ? "Getting the next episode ready…" : "Saving your place…",
+                     position: position) {
+            if playNext { target.onEnded?() }
+        }
     }
 
     private func changeSource() {
         guard let onChangeSource = target.onChangeSource else { return }
         let position = scrubbing ? scrubTarget : model.position
-        commitScrubIfNeeded()
-        onChangeSource(position)
-        dismiss()
+        exitPlayback(message: "Opening stream choices…", position: position) { onChangeSource(position) }
     }
 
     /// Rebuild only the decoder surface and keep Harbor's chrome/navigation alive.
     /// This makes an engine change behave like a quality switch rather than closing
     /// the player or losing the current episode position.
-    private func switchEngine(to engine: String, automaticFallback: Bool = false) {
+    private func switchEngine(to engine: String, automaticFallback: Bool = false, retry: Bool = false) {
+        guard !handledEnd, !isSwitching else { return }
         guard ["mpv", "vlc", "ksplayer"].contains(engine) else { return }
         if !automaticFallback, engine != "mpv",
            subAssOverride == "force" || (target.isAnime && animeActive) {
             return
         }
-        if activeEngine == engine, model.playbackStarted {
+        if activeEngine == engine, model.playbackStarted, !retry {
             applySubtitleStyleSoon()
             return
         }
 
-        loadWatchdog?.cancel()
+        cancelPlayerWork()
         let position = scrubbing ? scrubTarget : model.position
-        commitScrubIfNeeded()
-        engineStartAt = max(0, position)
-        model.controller = nil
+        scrubbing = false
+        isSwitching = true
+        transitionMessage = "Switching to \(engineDisplayName(engine))…"
+        transitionTask = Task { @MainActor in
+            await model.shutdown()
+            guard !Task.isCancelled, !handledEnd, isVisible else { return }
+            resetEngine(to: engine, position: position, automaticFallback: automaticFallback)
+        }
+    }
+
+    private func resetEngine(to engine: String, position: Double, automaticFallback: Bool) {
+        engineStartAt = max(0, position.isFinite ? position : 0)
         model.ready = false
         model.playbackStarted = false
         model.ended = false
         model.paused = false
         model.anime4KActive = false
+        model.buffering = true
+        model.playbackError = nil
+        terminalError = false
         model.position = engineStartAt
         audioTracks = []
         subtitleTracks = []
         selectedAudioTrackID = nil
+        pendingAudioTrackID = nil
+        pendingSubtitleTrackID = nil
         selectedSubtitleTrackID = -1
         audioCodec = ""
         audioOut = ""
@@ -1243,6 +1305,10 @@ struct PlayerView: View {
         }
         sessionEngine = engine
         engineGeneration += 1
+        isSwitching = false
+        transitionMessage = nil
+        introSkipLoaded = false
+        showControls()
         scheduleLoadWatchdog(for: engine, generation: engineGeneration)
     }
 
@@ -1253,13 +1319,14 @@ struct PlayerView: View {
         loadWatchdog?.cancel()
         loadWatchdog = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 18_000_000_000)
-            guard !Task.isCancelled, !model.playbackStarted,
+            guard !Task.isCancelled, !handledEnd, !isSwitching, !model.playbackStarted,
                   engineGeneration == generation, activeEngine == engine else { return }
             fallbackFromStalledEngine(engine)
         }
     }
 
     private func fallbackFromStalledEngine(_ failedEngine: String) {
+        guard !handledEnd, !isSwitching else { return }
         let order: [String]
         switch failedEngine {
         case "vlc": order = ["mpv", "ksplayer"]
@@ -1267,7 +1334,9 @@ struct PlayerView: View {
         default: order = ["vlc", "ksplayer"]
         }
         guard let next = order.first(where: { !attemptedEngines.contains($0) }) else {
-            fallbackNotice = "No playback engine could open this stream"
+            loadWatchdog?.cancel()
+            fallbackNotice = nil
+            terminalError = true
             return
         }
         fallbackNotice = "\(engineDisplayName(failedEngine)) did not respond · trying \(engineDisplayName(next))"
@@ -1302,11 +1371,12 @@ struct PlayerView: View {
         let episode = target.episode
         let duration = model.duration
         let isAnime = target.isAnime
-        Task {
+        introTask = Task {
             let segments = await IntroSkipService.segments(
                 contentID: contentID, season: season, episode: episode,
                 duration: duration, isAnime: isAnime, chapters: chapters)
             await MainActor.run {
+                guard !Task.isCancelled, !handledEnd, isVisible else { return }
                 skipSegments = segments
                 updateActiveSkip(at: model.position)
             }
@@ -1422,7 +1492,9 @@ struct PlayerView: View {
         guard controlsHideSeconds > 0 else { return }
         hideTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: UInt64(controlsHideSeconds) * 1_000_000_000)
-            guard !Task.isCancelled, !showOptions else { return }
+            guard !Task.isCancelled, !showOptions, !confirmingLeave, !handledEnd,
+                  !model.paused, model.playbackStarted, selected != .scrub,
+                  selected != .skip, selected != .upNext else { return }
             withAnimation { showInfo = false }
         }
     }
@@ -1450,17 +1522,69 @@ struct PlayerView: View {
     /// main-actor turn after all player-owned work has been cancelled and progress
     /// has been reported exactly once.
     private func leavePlayback() {
-        guard !handledEnd else { return }
-        handledEnd = true
-        confirmingLeave = false
+        exitPlayback(message: "Saving your place…", position: model.position) {}
+    }
+
+    private func cancelPlayerWork() {
         hideTask?.cancel()
         scrubCommit?.cancel()
         skipHideTask?.cancel()
         loadWatchdog?.cancel()
-        target.onProgress?(model.position, model.duration)
-        Task { @MainActor in
-            await Task.yield()
+        introTask?.cancel()
+        noticeTask?.cancel()
+        trackRefreshTask?.cancel()
+    }
+
+    private func exitPlayback(message: String, position: Double, afterStop: @escaping () -> Void) {
+        guard !handledEnd else { return }
+        handledEnd = true
+        confirmingLeave = false
+        showOptions = false
+        transitionMessage = message
+        cancelPlayerWork()
+        transitionTask?.cancel()
+        target.onProgress?(position, model.duration)
+        transitionTask = Task { @MainActor in
+            // A fresh actor turn escapes VLC/KSPlayer delegate reentrancy. Join
+            // any engine switch already stopping the same native controller.
+            await model.shutdown()
+            guard isVisible else { return }
+            afterStop()
             dismiss()
+        }
+    }
+
+    private func playbackStatus(title: String, subtitle: String, error: Bool = false) -> some View {
+        VStack(spacing: 18) {
+            if error {
+                Image(systemName: "exclamationmark.triangle").font(.system(size: 38))
+            } else { ProgressView().controlSize(.large).tint(.white) }
+            Text(title).font(.system(size: 28, weight: .bold))
+            Text(subtitle).font(.system(size: 19)).foregroundStyle(.white.opacity(0.66))
+        }
+        .multilineTextAlignment(.center)
+        .padding(34)
+        .background(.black.opacity(0.82), in: RoundedRectangle(cornerRadius: 22))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .allowsHitTesting(false)
+    }
+
+    private func controlLabel(_ control: Control) -> String {
+        switch control {
+        case .skip: return activeSkip?.label ?? "Skip"
+        case .upNext, .next: return "Next episode"
+        case .restart: return "Restart from beginning"
+        case .back: return "Back \(seekBackStep) seconds"
+        case .fwd: return "Forward \(seekForwardStep) seconds"
+        case .play: return model.paused ? "Play" : "Pause"
+        case .source: return "Change source"
+        case .engine: return "Playback engine · \(engineDisplayName(activeEngine))"
+        case .audio: return "Audio language"
+        case .subs: return "Subtitles"
+        case .aspect: return "Picture size"
+        case .speed: return "Playback speed"
+        case .anime: return "Anime4K"
+        case .scrub: return "Timeline"
         }
     }
 
@@ -1521,7 +1645,7 @@ struct PlayerView: View {
     }
 
     private func timeString(_ t: Double) -> String {
-        guard t.isFinite, t >= 0 else { return "0:00" }
+        guard t.isFinite, t >= 0, t < Double(Int.max) else { return "0:00" }
         let s = Int(t), h = s / 3600, m = (s % 3600) / 60, sec = s % 60
         return h > 0 ? String(format: "%d:%02d:%02d", h, m, sec) : String(format: "%d:%02d", m, sec)
     }

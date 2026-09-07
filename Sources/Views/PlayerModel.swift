@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 /// Common surface used by the player chrome. MPV, VLC and KSPlayer conform, so
 /// controls never need to know which decoder currently owns the video view.
@@ -20,6 +21,11 @@ protocol HarborPlayerController: AnyObject {
     func recoverAudioOutput(forceStereo: Bool)
     func setVideoSize(_ mode: String)
     func applySubtitleStyle()
+    func shutdown(completion: @escaping @MainActor () -> Void)
+}
+
+extension HarborPlayerController {
+    func shutdown() { shutdown(completion: {}) }
 }
 
 // Bridges the active playback engine to the SwiftUI controls overlay.
@@ -34,11 +40,34 @@ final class PlayerModel: ObservableObject {
     @Published var playbackStarted: Bool = false
     @Published var ended: Bool = false
     @Published var anime4KActive: Bool = false
+    @Published var buffering: Bool = true
+    @Published var playbackError: String?
     /// Last mpv warn/error log lines, shown in the in-player Debug panel so playback
     /// problems can be read directly on the Apple TV (no Mac needed).
     @Published var logLines: [String] = []
 
     weak var controller: (any HarborPlayerController)?
+    private var shutdownTask: Task<Void, Never>?
+
+    func owns(_ candidate: any HarborPlayerController) -> Bool {
+        guard let controller else { return false }
+        return ObjectIdentifier(controller) == ObjectIdentifier(candidate)
+    }
+
+    func shutdown() async {
+        if let shutdownTask { await shutdownTask.value; return }
+        guard let current = controller else { return }
+        // Ignore queued callbacks immediately, before awaiting native teardown.
+        controller = nil
+        let task = Task { @MainActor in
+            await withCheckedContinuation { continuation in
+                current.shutdown { continuation.resume() }
+            }
+        }
+        shutdownTask = task
+        await task.value
+        shutdownTask = nil
+    }
 
     /// Returns true only when `candidate` still owns the shared session. During
     /// a live engine swap SwiftUI may dismantle the old view after the new view
@@ -59,7 +88,7 @@ final class PlayerModel: ObservableObject {
     var progress: Double { duration > 0 ? min(1, position / duration) : 0 }
 
     static func fmt(_ s: Double) -> String {
-        guard s.isFinite, s >= 0 else { return "0:00" }
+        guard s.isFinite, s >= 0, s < Double(Int.max) else { return "0:00" }
         let t = Int(s)
         let h = t / 3600, m = (t % 3600) / 60, sec = t % 60
         return h > 0 ? String(format: "%d:%02d:%02d", h, m, sec)

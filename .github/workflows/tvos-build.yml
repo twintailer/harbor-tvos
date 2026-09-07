@@ -9,6 +9,7 @@ on:
   pull_request:
     paths:
       - "Sources/**"
+      - "Tests/**"
       - "Resources/**"
       - "scripts/**"
       - "project.yml"
@@ -17,6 +18,7 @@ on:
     branches: [main]
     paths:
       - "Sources/**"
+      - "Tests/**"
       - "Resources/**"
       - "scripts/**"
       - "project.yml"
@@ -25,10 +27,21 @@ on:
 jobs:
   build-tvos:
     name: tvOS (arm64)
+    # Standard hosted macOS is free for this PUBLIC repository. Never consume
+    # private-repository minutes if the visibility changes later.
+    if: github.event.repository.private == false
     runs-on: macos-latest
     timeout-minutes: 70
     steps:
       - uses: actions/checkout@v4
+
+      - name: Playback lifecycle regression tests
+        run: |
+          swiftc -swift-version 5 -parse-as-library \
+            Sources/Services/PlaybackLifecycle.swift Sources/Models/PlaybackTypes.swift \
+            Sources/Views/PlayerModel.swift Tests/PlaybackLifecycleTests.swift \
+            -o /tmp/harbor-playback-tests
+          /tmp/harbor-playback-tests
 
       - name: Install build tools
         run: |
@@ -70,7 +83,7 @@ jobs:
           test -n "$APP"
           mkdir -p Payload dist
           cp -R "$APP" Payload/
-          zip -r -q "dist/Harbor_tvOS_0.4.1_unsigned.ipa" Payload
+          zip -r -q "dist/Harbor_tvOS_0.4.2_unsigned.ipa" Payload
           ls -la dist
 
       - name: Upload IPA artifact

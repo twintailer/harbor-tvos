@@ -243,7 +243,8 @@ extension StremioService {
     static func saveProgress(authKey: String, meta: MetaItem, videoId: String,
                              season: Int?, episode: Int?, position: Double,
                              duration: Double, existing: LibraryItem?) async {
-        guard duration > 0, position >= 0 else { return }
+        guard duration.isFinite, position.isFinite, duration > 0, position >= 0,
+              duration < Double(Int.max) / 1000, position < Double(Int.max) / 1000 else { return }
         let now = ISO8601DateFormatter().string(from: Date())
         let watched = position / duration >= 0.9
         let creditsReached = position / duration >= 0.98

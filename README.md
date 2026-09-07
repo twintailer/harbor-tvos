@@ -5,7 +5,25 @@ the Tauri/React shell used on Windows and Android cannot run here. The tvOS app
 recreates Harbor with the tvOS focus engine and a native MPVKit player while
 using the same Stremio account, add-on, catalog, metadata and stream APIs.
 
-## Current feature set — 0.2
+## Playback stability and TV experience — 0.4.2
+
+- Next episode, source changes, engine changes and Back share a native teardown
+  barrier. VLC waits for `stopped`; MPV retains its Metal surface until destruction
+  finishes on its serial queue. Decoder callbacks no longer own presentation.
+- Cancelled/stale stream requests cannot open another player; source sheets finish
+  dismissing before presenting video. Audio-session ownership spans player models.
+- Player actions have readable labels, menus restore the last button, Down reaches
+  the timeline, and Play/Pause always controls playback, even during a skip prompt.
+- Next-episode titles, cancellable stream loading, explicit playback-error recovery,
+  catalog retry and focusable page-loading actions replace ambiguous waiting states.
+- Off-main MPV metadata snapshots, stable menu identities, coalesced/limited artwork
+  loading, a 64 MiB decoded-art cache and 30-episode batches reduce UI/memory work.
+- Playback progress saves are ordered; full library refresh runs after leaving video.
+
+Native framework crashes and HDMI/Anime4K frame pacing still require Apple TV
+hardware verification. A successful compile or logic test is not a device soak test.
+
+## Current feature set
 
 - Harbor navigation: Home, Discover, Catalogs, Movies, Series, Anime, Library,
   Add-ons, Search and Settings
@@ -49,7 +67,17 @@ The GitHub workflow builds an unsigned tvOS IPA on a macOS runner:
 gh workflow run tvos-build.yml
 ```
 
-Artifact: `harbor-tvos` → `Harbor_tvOS_0.3.1_unsigned.ipa`.
+Artifact: `harbor-tvos` → `Harbor_tvOS_0.4.2_unsigned.ipa`.
+
+The workflow uses the standard `macos-latest` runner in the public repository;
+it does not consume private-repository included minutes. A public-only job guard
+prevents runs if the repository becomes private. This is still GitHub Actions,
+not a local or self-hosted Mac.
+
+Before building, the workflow compiles and runs `Tests/PlaybackLifecycleTests.swift`
+against the production lifecycle types and `PlayerModel`. It checks duplicate stops,
+late callbacks, rapid cancellation, overlapping exit/engine switches, audio ownership
+and directional remote navigation without requiring a simulator.
 
 For a local build on macOS, install Pillow and XcodeGen, then run
 `python3 scripts/generate-assets.py`, `bash scripts/fetch-anime4k.sh` and

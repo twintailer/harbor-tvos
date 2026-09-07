@@ -8,16 +8,40 @@ import UIKit
 actor HarborArtworkCache {
     static let shared = HarborArtworkCache()
     private let images = NSCache<NSString, UIImage>()
+    private var inFlight: [String: Task<UIImage?, Never>] = [:]
+    private var activeLoads = 0
+    private var slots: [CheckedContinuation<Void, Never>] = []
 
     init() {
         images.countLimit = 120
-        images.totalCostLimit = 128 * 1024 * 1024
+        images.totalCostLimit = 64 * 1024 * 1024
     }
 
     func image(for rawURL: String?, maxPixelSize: CGFloat = 1600) async -> UIImage? {
         guard let rawURL, let url = URL(string: rawURL), !rawURL.isEmpty else { return nil }
         let key = "\(rawURL)|\(Int(maxPixelSize))" as NSString
         if let cached = images.object(forKey: key) { return cached }
+        if let task = inFlight[key as String] { return await task.value }
+        let task = Task { await self.load(url: url, maxPixelSize: maxPixelSize) }
+        inFlight[key as String] = task
+        let image = await task.value
+        inFlight[key as String] = nil
+        if let image, let cgImage = image.cgImage {
+            images.setObject(image, forKey: key, cost: cgImage.bytesPerRow * cgImage.height)
+        }
+        return image
+    }
+
+    func purge() { images.removeAllObjects() }
+
+    private func load(url: URL, maxPixelSize: CGFloat) async -> UIImage? {
+        // Avoid a burst of dozens of image decodes competing with VideoToolbox.
+        if activeLoads >= 4 {
+            await withCheckedContinuation { slots.append($0) }
+        } else { activeLoads += 1 }
+        defer {
+            if slots.isEmpty { activeLoads -= 1 } else { slots.removeFirst().resume() }
+        }
 
         var request = URLRequest(url: url)
         request.cachePolicy = .returnCacheDataElseLoad
@@ -41,10 +65,7 @@ actor HarborArtworkCache {
                 kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
                 kCGImageSourceShouldCacheImmediately: true,
               ] as CFDictionary) else { return nil }
-        let image = UIImage(cgImage: cgImage)
-        images.setObject(image, forKey: key,
-                         cost: max(1, cgImage.bytesPerRow * cgImage.height))
-        return image
+        return UIImage(cgImage: cgImage)
     }
 }
 

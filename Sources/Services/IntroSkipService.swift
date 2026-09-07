@@ -19,14 +19,9 @@ struct SkipSegment: Hashable, Identifiable {
     }
 }
 
-struct MediaChapter: Hashable {
-    let title: String
-    let start: Double
-    let end: Double
-}
-
 /// Mirrors Harbor desktop's skip-source order: AniSkip, TheIntroDB, then named
 /// chapters carried by the file. Network providers are public and need no key.
+@MainActor
 enum IntroSkipService {
     private static let session: URLSession = {
         let configuration = URLSessionConfiguration.default
@@ -41,6 +36,7 @@ enum IntroSkipService {
     static func segments(contentID: String, season: Int?, episode: Int?,
                          duration: Double, isAnime: Bool,
                          chapters: [MediaChapter]) async -> [SkipSegment] {
+        guard duration.isFinite, duration > 0, duration < Double(Int.max) / 1000 else { return [] }
         let key = "\(contentID):\(season ?? 0):\(episode ?? 0):\(Int(duration))"
         if let cached = resultCache[key] {
             return merge([cached, chapterSegments(chapters, duration: duration)], duration: duration)
@@ -193,6 +189,7 @@ enum IntroSkipService {
     private static func merge(_ lists: [[SkipSegment]], duration: Double) -> [SkipSegment] {
         var merged: [SkipSegment] = []
         for segment in lists.flatMap({ $0 }).sorted(by: { $0.start < $1.start }) {
+            guard segment.start.isFinite, segment.end.isFinite else { continue }
             let end = duration > 0 ? min(segment.end, duration) : segment.end
             let normalized = SkipSegment(kind: segment.kind, start: max(0, segment.start),
                                          end: end, source: segment.source)

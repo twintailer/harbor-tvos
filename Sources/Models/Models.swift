@@ -62,7 +62,8 @@ struct MetaItem: Codable, Identifiable, Hashable {
 
         private static func flexInt(_ c: KeyedDecodingContainer<CodingKeys>, _ k: CodingKeys) -> Int? {
             if let i = try? c.decode(Int.self, forKey: k) { return i }
-            if let d = try? c.decode(Double.self, forKey: k) { return Int(d) }
+            if let d = try? c.decode(Double.self, forKey: k),
+               d.isFinite, d >= Double(Int.min), d < Double(Int.max) { return Int(d) }
             if let s = try? c.decode(String.self, forKey: k) { return Int(s) }
             return nil
         }

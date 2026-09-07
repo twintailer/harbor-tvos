@@ -35,7 +35,8 @@ final class KSPlayerViewController: UIViewController, HarborPlayerController,
     private let url: URL
     private let startAt: Double
     private let requestHeaders: [String: String]
-    private var shuttingDown = false
+    private let shutdownGate = PlaybackShutdownGate()
+    private var shuttingDown: Bool { shutdownGate.isStopping }
     private var appliedStart = false
 
     private(set) var videoSizeMode = UserDefaults.standard.string(
@@ -58,6 +59,7 @@ final class KSPlayerViewController: UIViewController, HarborPlayerController,
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        guard !shuttingDown else { return }
         view.backgroundColor = .black
         activateAudioSession()
 
@@ -96,24 +98,26 @@ final class KSPlayerViewController: UIViewController, HarborPlayerController,
     // MARK: PlayerControllerDelegate
 
     func playerController(state: KSPlayerState) {
-        guard !shuttingDown, let model else { return }
+        guard !shuttingDown, let model, model.owns(self) else { return }
         switch state {
         case .readyToPlay:
             model.ready = true
             model.paused = false
             applyInitialSeekIfNeeded()
         case .bufferFinished:
+            model.buffering = false
             model.ready = true
             model.playbackStarted = true
             model.paused = false
             applyInitialSeekIfNeeded()
         case .buffering, .preparing:
-            model.ready = true
+            model.buffering = true
         case .paused:
             model.paused = true
         case .playedToTheEnd:
             model.ended = true
         case .error:
+            model.playbackError = "KSPlayer could not play this source."
             model.logLines.append("[ksplayer] Playback error")
             if model.logLines.count > 40 {
                 model.logLines.removeFirst(model.logLines.count - 40)
@@ -124,12 +128,12 @@ final class KSPlayerViewController: UIViewController, HarborPlayerController,
     }
 
     func playerController(currentTime: TimeInterval, totalTime: TimeInterval) {
-        guard !shuttingDown, let model else { return }
+        guard !shuttingDown, let model, model.owns(self) else { return }
         if currentTime.isFinite, currentTime >= 0,
            abs(model.position - currentTime) > 0.12 {
             model.position = currentTime
         }
-        if currentTime.isFinite, currentTime > max(0.05, startAt + 0.05) {
+        if !model.playbackStarted, currentTime.isFinite, currentTime > max(0.05, startAt + 0.05) {
             model.playbackStarted = true
         }
         if totalTime.isFinite, totalTime > 0,
@@ -141,8 +145,9 @@ final class KSPlayerViewController: UIViewController, HarborPlayerController,
     }
 
     func playerController(finish error: Error?) {
-        guard !shuttingDown, let model else { return }
+        guard !shuttingDown, let model, model.owns(self) else { return }
         if let error {
+            model.playbackError = "KSPlayer could not play this source."
             model.logLines.append("[ksplayer] \(error.localizedDescription)")
         } else {
             model.ended = true
@@ -257,15 +262,15 @@ final class KSPlayerViewController: UIViewController, HarborPlayerController,
         playerView.updateSrt()
     }
 
-    func shutdown() {
-        guard !shuttingDown else { return }
-        shuttingDown = true
+    func shutdown(completion: @escaping @MainActor () -> Void) {
+        guard shutdownGate.begin(completion) else { return }
         playerView.delegate = nil
-        playerView.pause()
-        playerView.playerLayer?.stop()
-        if model?.releaseController(self) == true {
-            try? AVAudioSession.sharedInstance().setActive(
-                false, options: .notifyOthersOnDeactivation)
+        _ = model?.releaseController(self)
+        Task { @MainActor in
+            self.playerView.pause()
+            self.playerView.playerLayer?.stop()
+            PlaybackAudioSession.release(self)
+            self.shutdownGate.finish()
         }
     }
 
@@ -285,9 +290,7 @@ final class KSPlayerViewController: UIViewController, HarborPlayerController,
     }
 
     private func activateAudioSession() {
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .moviePlayback)
-        try? session.setActive(true)
+        PlaybackAudioSession.activate(for: self)
     }
 
     private static func color(_ raw: String) -> Color {

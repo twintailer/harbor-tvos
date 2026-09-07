@@ -6,6 +6,7 @@ struct HomeView: View {
     @EnvironmentObject private var auth: AuthStore
     @State private var rows: [CatalogRow] = []
     @State private var loading = true
+    @State private var refreshRevision = 0
     @AppStorage(SubtitleStyle.Key.homeShowAllRows) private var showAllRows = false
 
     var body: some View {
@@ -24,7 +25,25 @@ struct HomeView: View {
                         }
                     }
 
-                    if loading { ProgressView().padding(.horizontal, 60) }
+                    if loading {
+                        HStack(spacing: 24) {
+                            ForEach(0..<4, id: \.self) { _ in
+                                RoundedRectangle(cornerRadius: HarborTVDesign.cardRadius)
+                                    .fill(HarborTVDesign.panel).frame(width: 350, height: 197)
+                            }
+                        }
+                        .padding(.horizontal, 60)
+                        .accessibilityLabel("Loading your catalogs")
+                    } else if rows.isEmpty {
+                        VStack(spacing: 0) {
+                            HarborEmptyState(icon: "square.stack", title: "Your catalogs belong here",
+                                             message: auth.addons.isEmpty
+                                              ? "Sign in and add a metadata provider to build your home screen."
+                                              : "No titles loaded. Check your connection or try again.")
+                            Button("Try again") { refreshRevision += 1 }
+                                .buttonStyle(HarborActionButtonStyle(tone: .primary))
+                        }
+                    }
                     ForEach(rows) { row in
                         CatalogRowView(row: row)
                     }
@@ -37,10 +56,11 @@ struct HomeView: View {
             }
         }
         // Rebuild rows when the signed-in addons change.
-        .task(id: "\(addonRevision)-\(showAllRows)") {
-            await auth.loadLibrary()
-            await auth.loadContinueWatching()
-            rows = await AddonService.homeRows(addons: auth.addons)
+        .task(id: "\(addonRevision)-\(showAllRows)-\(refreshRevision)") {
+            loading = rows.isEmpty
+            let loaded = await AddonService.homeRows(addons: auth.addons)
+            guard !Task.isCancelled else { return }
+            rows = loaded
             loading = false
         }
     }
@@ -106,8 +126,6 @@ private struct HarborDesktopHero: View {
                     .frame(maxWidth: 720, alignment: .leading)
 
                 HStack(spacing: 12) {
-                    Text("98% Match")
-                        .foregroundStyle(HarborTVDesign.success)
                     if let release = item.releaseInfo, !release.isEmpty { Text(release) }
                     Text(item.type == "movie" ? "MOVIE" : (item.type == "anime" ? "ANIME" : "SERIES"))
                         .font(.system(size: 13, weight: .heavy))
@@ -130,7 +148,7 @@ private struct HarborDesktopHero: View {
 
                 HStack(spacing: 14) {
                     NavigationLink(value: item) {
-                        Label("Play", systemImage: "play.fill")
+                        Label("Watch options", systemImage: "play.fill")
                     }
                     .buttonStyle(HarborActionButtonStyle(tone: .primary))
                     NavigationLink(value: item) {
@@ -231,7 +249,7 @@ struct CatalogRowView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HarborSectionHeading(title: row.title,
-                                 subtitle: visibleItems.isEmpty ? nil : "\(visibleItems.count)+ titles",
+                                 subtitle: visibleItems.isEmpty ? nil : "\(visibleItems.count)\(hasMore ? "+" : "") titles",
                                  scale: CGFloat(titleScale))
                 .padding(.horizontal, 60)
             ScrollView(.horizontal) {
@@ -240,10 +258,19 @@ struct CatalogRowView: View {
                         HarborLandscapeCard(item: item)
                     }
                     if hasMore, row.source != nil {
-                        ProgressView()
-                            .controlSize(.large)
-                            .frame(width: 120, height: 235)
-                            .task { await loadMore() }
+                        Button {
+                            Task { await loadMore() }
+                        } label: {
+                            VStack(spacing: 12) {
+                                if loadingMore { ProgressView() }
+                                else { Image(systemName: "plus.circle").font(.system(size: 34)) }
+                                Text(loadingMore ? "Loading…" : "More titles")
+                            }
+                            .frame(width: 190, height: 197)
+                        }
+                        .buttonStyle(HarborCardFocusStyle())
+                        // Remains focusable at the edge while the next batch loads.
+                        .task { await loadMore() }
                     }
                 }
                 .padding(.horizontal, 60)
@@ -257,6 +284,7 @@ struct CatalogRowView: View {
         guard !loadingMore, hasMore, let source = row.source else { return }
         loadingMore = true
         let page = await AddonService.catalog(source: source, skip: nextSkip)
+        guard !Task.isCancelled else { loadingMore = false; return }
         let existing = Set(loadedItems.map { "\($0.type):\($0.id)" })
         let fresh = page.filter { !existing.contains("\($0.type):\($0.id)") }
         nextSkip += page.count

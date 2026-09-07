@@ -11,7 +11,7 @@ enum HarborTVDesign {
     static let success = Color(red: 0.25, green: 0.82, blue: 0.48)
     static let primaryText = Color.white
     static let secondaryText = Color.white.opacity(0.68)
-    static let tertiaryText = Color.white.opacity(0.43)
+    static let tertiaryText = Color.white.opacity(0.56)
     static let pageInset: CGFloat = 58
     static let cardRadius: CGFloat = 10
 
@@ -116,6 +116,8 @@ private struct HarborActionButtonBody: View {
     let configuration: ButtonStyle.Configuration
     let tone: HarborActionTone
     @Environment(\.isFocused) private var focused
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isEnabled) private var enabled
 
     private var foreground: Color {
         if focused || tone == .primary { return .black }
@@ -139,9 +141,10 @@ private struct HarborActionButtonBody: View {
             .frame(minHeight: 54)
             .background(Capsule().fill(fill))
             .overlay(Capsule().stroke(.white.opacity(focused ? 0.95 : 0.18), lineWidth: focused ? 3 : 1))
-            .scaleEffect(focused ? 1.07 : (configuration.isPressed ? 0.98 : 1))
-            .shadow(color: .black.opacity(focused ? 0.56 : 0), radius: 22, y: 10)
-            .animation(.easeOut(duration: 0.14), value: focused)
+            .opacity(enabled ? 1 : 0.45)
+            .scaleEffect(reduceMotion ? 1 : (focused ? 1.045 : (configuration.isPressed ? 0.98 : 1)))
+            .shadow(color: .black.opacity(focused ? 0.44 : 0), radius: 14, y: 6)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: focused)
     }
 }
 
@@ -192,6 +195,7 @@ struct HarborRowFocusStyle: ButtonStyle {
 private struct HarborRowFocusBody: View {
     let configuration: ButtonStyle.Configuration
     @Environment(\.isFocused) private var focused
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         configuration.label
@@ -203,9 +207,8 @@ private struct HarborRowFocusBody: View {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(focused ? .white.opacity(0.92) : .white.opacity(0.055),
                             lineWidth: focused ? 3 : 1))
-            .scaleEffect(focused ? 1.018 : (configuration.isPressed ? 0.992 : 1))
-            .shadow(color: .black.opacity(focused ? 0.48 : 0), radius: 18, y: 9)
-            .animation(.easeOut(duration: 0.14), value: focused)
+            .scaleEffect(reduceMotion ? 1 : (focused ? 1.012 : (configuration.isPressed ? 0.992 : 1)))
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: focused)
     }
 }
 
@@ -216,6 +219,7 @@ private struct HarborCardFocusBody: View {
     let scale: CGFloat
     let reduceMotion: Bool
     @Environment(\.isFocused) private var focused
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
 
     var body: some View {
         configuration.label
@@ -231,10 +235,10 @@ private struct HarborCardFocusBody: View {
                         .padding(.horizontal, 6)
                 }
             }
-            .scaleEffect(focused ? scale : (configuration.isPressed ? 0.985 : 1))
-            .shadow(color: .black.opacity(focused ? 0.72 : 0.18), radius: focused ? 26 : 8, y: focused ? 14 : 5)
+            .scaleEffect(reduceMotion || systemReduceMotion ? 1 : (focused ? min(scale, 1.045) : (configuration.isPressed ? 0.985 : 1)))
+            .shadow(color: .black.opacity(focused ? 0.52 : 0), radius: 16, y: 8)
             .zIndex(focused ? 5 : 0)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: focused)
+            .animation(reduceMotion || systemReduceMotion ? nil : .easeOut(duration: 0.15), value: focused)
     }
 }
 

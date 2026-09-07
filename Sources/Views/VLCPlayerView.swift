@@ -33,7 +33,8 @@ final class VLCViewController: UIViewController, HarborPlayerController {
     private let startAt: Double
     private let requestHeaders: [String: String]
     private var appliedStart = false
-    private var shuttingDown = false
+    private let shutdownGate = PlaybackShutdownGate()
+    private var shuttingDown: Bool { shutdownGate.isStopping }
 
     private(set) var videoSizeMode = UserDefaults.standard.string(
         forKey: SubtitleStyle.Key.videoSize) ?? "original"
@@ -51,6 +52,7 @@ final class VLCViewController: UIViewController, HarborPlayerController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        guard !shuttingDown else { return }
         view.backgroundColor = .black
         attachVideoView()
         activateAudioSession()
@@ -77,12 +79,15 @@ final class VLCViewController: UIViewController, HarborPlayerController {
 
     private func bindEngine() {
         engine.onState = { [weak self] playing, buffering, ended, errored in
-            guard let self, !self.shuttingDown, let model = self.model else { return }
-            model.paused = !playing && !buffering
-            if playing || buffering { model.ready = true }
-            if playing { model.playbackStarted = true }
+            guard let self, !self.shuttingDown, let model = self.model, model.owns(self) else { return }
+            let paused = !playing && !buffering
+            if model.paused != paused { model.paused = paused }
+            if model.buffering != buffering { model.buffering = buffering }
+            if playing, !model.ready { model.ready = true }
+            if playing, !model.playbackStarted { model.playbackStarted = true }
             if ended { model.ended = true }
             if errored {
+                model.playbackError = "VLC could not play this source."
                 model.logLines.append("[vlc] Playback error")
                 if model.logLines.count > 40 { model.logLines.removeFirst(model.logLines.count - 40) }
             }
@@ -92,11 +97,11 @@ final class VLCViewController: UIViewController, HarborPlayerController {
             }
         }
         engine.onTime = { [weak self] position, duration in
-            guard let self, !self.shuttingDown, let model = self.model else { return }
-            if position.isFinite, position >= 0 { model.position = position }
-            if duration.isFinite, duration > 0 {
+            guard let self, !self.shuttingDown, let model = self.model, model.owns(self) else { return }
+            if position.isFinite, position >= 0, abs(model.position - position) > 0.08 { model.position = position }
+            if duration.isFinite, duration > 0, abs(model.duration - duration) > 0.2 {
                 model.duration = duration
-                model.ready = true
+                if !model.ready { model.ready = true }
             }
         }
     }
@@ -157,21 +162,23 @@ final class VLCViewController: UIViewController, HarborPlayerController {
         engine.setVideoMode(mode)
     }
 
-    func shutdown() {
-        guard !shuttingDown else { return }
-        shuttingDown = true
+    func shutdown(completion: @escaping @MainActor () -> Void) {
+        guard shutdownGate.begin(completion) else { return }
         engine.onState = nil
         engine.onTime = nil
-        engine.stop()
-        if model?.releaseController(self) == true {
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        _ = model?.releaseController(self)
+        // VLCKit stop() is asynchronous. Retain the controller and drawable until
+        // the stopped acknowledgement, and never stop from inside its delegate.
+        Task { @MainActor in
+            self.engine.stop {
+                PlaybackAudioSession.release(self)
+                self.shutdownGate.finish()
+            }
         }
     }
 
     private func activateAudioSession() {
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .moviePlayback)
-        try? session.setActive(true)
+        PlaybackAudioSession.activate(for: self)
     }
 
     private func languageCode(from name: String) -> String {
@@ -199,6 +206,8 @@ private final class HarborVLCEngine: NSObject {
     var onState: (@MainActor (Bool, Bool, Bool, Bool) -> Void)?
     var onTime: (@MainActor (TimeInterval, TimeInterval) -> Void)?
     private var lastTimeEmission = 0.0
+    private var stopCompletion: (@MainActor () -> Void)?
+    private var loaded = false
 
     override init() {
         super.init()
@@ -208,6 +217,7 @@ private final class HarborVLCEngine: NSObject {
     }
 
     func load(url: URL, networkCachingMs: Int, headers: [String: String]) {
+        loaded = true
         let media = VLCMedia(url: url)
         for (key, value) in headers {
             switch key.lowercased() {
@@ -228,9 +238,25 @@ private final class HarborVLCEngine: NSObject {
 
     func play() { player.play() }
     func pause() { if player.isPlaying { player.pause() } }
-    func stop() { player.stop() }
+    @MainActor
+    func stop(completion: @escaping @MainActor () -> Void) {
+        guard loaded else { player.delegate = nil; player.drawable = nil; completion(); return }
+        stopCompletion = completion
+        player.stop()
+    }
+
+    @MainActor
+    private func didStop() {
+        guard let completion = stopCompletion else { return }
+        stopCompletion = nil
+        player.delegate = nil
+        player.drawable = nil
+        player.media = nil
+        completion()
+    }
     func seek(to seconds: TimeInterval) {
-        player.time = VLCTime(int: Int32(max(0, seconds) * 1000))
+        guard seconds.isFinite else { return }
+        player.time = VLCTime(int: Int32(min(Double(Int32.max), max(0, seconds) * 1000)))
     }
 
     var currentTime: TimeInterval { Double(player.time.intValue) / 1000 }
@@ -277,7 +303,11 @@ extension HarborVLCEngine: VLCMediaPlayerDelegate {
         let buffering = state == .buffering || state == .opening
         let ended = state == .ended
         let errored = state == .error
-        MainActor.assumeIsolated { onState?(playing, buffering, ended, errored) }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if state == .stopped { self.didStop() }
+            self.onState?(playing, buffering, ended, errored)
+        }
     }
 
     func mediaPlayerTimeChanged(_ notification: Notification) {
@@ -287,6 +317,6 @@ extension HarborVLCEngine: VLCMediaPlayerDelegate {
         guard now - lastTimeEmission >= 0.24 || current < 0.5
                 || (total > 0 && total - current < 0.5) else { return }
         lastTimeEmission = now
-        MainActor.assumeIsolated { onTime?(current, total) }
+        DispatchQueue.main.async { [weak self] in self?.onTime?(current, total) }
     }
 }

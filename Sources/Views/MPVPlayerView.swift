@@ -26,21 +26,6 @@ struct MPVPlayerView: UIViewControllerRepresentable {
     }
 }
 
-// One audio / subtitle / video track from mpv's track-list.
-struct MPVTrack: Identifiable, Hashable {
-    let id: Int
-    let type: String
-    let title: String
-    let lang: String
-    let selected: Bool
-    let external: Bool
-    let forced: Bool
-    let defaultTrack: Bool
-    let hearingImpaired: Bool
-    let codec: String
-    let externalFilename: String
-}
-
 final class MPVViewController: UIViewController, HarborPlayerController {
     private var mpv: OpaquePointer?
     private let url: URL
@@ -54,6 +39,12 @@ final class MPVViewController: UIViewController, HarborPlayerController {
     private var poll: DispatchSourceTimer?
     private let mpvQueue = DispatchQueue(label: "app.harbor.tvos.mpv")
     private let log = Logger(subsystem: "app.harbor.tvos", category: "mpv")
+    private let shutdownGate = PlaybackShutdownGate()
+    // Main-actor snapshots: the focus/UI path never waits for a native getter.
+    private var cachedTracks: [MPVTrack] = []
+    private var cachedSummary = (height: 0, audioCodec: "", audioOut: "")
+    private var cachedChapters: [MediaChapter] = []
+    private var lastSnapshotAt = 0.0 // mpvQueue only
 
     init(url: URL, model: PlayerModel, startAt: Double, anime4K: Bool,
          requestHeaders: [String: String]) {
@@ -69,6 +60,7 @@ final class MPVViewController: UIViewController, HarborPlayerController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        guard !shutdownGate.isStopping else { return }
         view.backgroundColor = .black
         let layer = CAMetalLayer()
         layer.frame = view.bounds
@@ -90,18 +82,27 @@ final class MPVViewController: UIViewController, HarborPlayerController {
         // animation hitches whenever the GPU was already busy with Anime4K.
         let timer = DispatchSource.makeTimerSource(queue: mpvQueue)
         timer.schedule(deadline: .now() + .milliseconds(200),
-                       repeating: .milliseconds(400), leeway: .milliseconds(80))
-        timer.setEventHandler { [weak self] in self?.tickOnPlayerQueue() }
+                       repeating: .milliseconds(250), leeway: .milliseconds(40))
+        timer.setEventHandler { [weak self] in
+            self?.drainEvents()
+            self?.tickOnPlayerQueue()
+        }
         timer.resume()
         poll = timer
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        metalLayer?.frame = view.bounds
-        metalLayer?.drawableSize = CGSize(
+        guard !shutdownGate.isStopping, view.bounds.width > 0, view.bounds.height > 0 else { return }
+        let size = CGSize(
             width: view.bounds.width * UIScreen.main.scale,
             height: view.bounds.height * UIScreen.main.scale)
+        guard metalLayer?.drawableSize != size else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        metalLayer?.frame = view.bounds
+        metalLayer?.drawableSize = size
+        CATransaction.commit()
     }
 
     // MARK: mpv helpers
@@ -125,7 +126,7 @@ final class MPVViewController: UIViewController, HarborPlayerController {
     }
     private func getFlag(_ name: String) -> Bool {
         guard let mpv else { return false }
-        var v = Int64()
+        var v = Int32()
         mpv_get_property(mpv, name, MPV_FORMAT_FLAG, &v)
         return v != 0
     }
@@ -149,15 +150,7 @@ final class MPVViewController: UIViewController, HarborPlayerController {
 
     @discardableResult
     private func activateAudioSession() -> Bool {
-        let session = AVAudioSession.sharedInstance()
-        do {
-            try session.setCategory(.playback, mode: .moviePlayback, options: [])
-            try session.setActive(true)
-            return true
-        } catch {
-            log.error("AVAudioSession activation failed: \(error.localizedDescription, privacy: .public)")
-            return false
-        }
+        PlaybackAudioSession.activate(for: self)
     }
 
     private func setupMPV() {
@@ -238,24 +231,21 @@ final class MPVViewController: UIViewController, HarborPlayerController {
             log.error("mpv initialization failed: \(message, privacy: .public)")
             mpv = nil
             mpv_terminate_destroy(ctx)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let model = self.model, model.owns(self) else { return }
+                model.playbackError = "MPV could not initialize."
+            }
             return
         }
 
-        // Event loop: drain mpv's queue off-main. Captures warnings/errors (incl. audio-output
-        // failures) into the unified log and keeps the queue from overflowing.
-        mpv_set_wakeup_callback(ctx, { ctx in
-            let me = unsafeBitCast(ctx, to: MPVViewController.self)
-            me.drainEvents()
-        }, UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque()))
-
-        command(["loadfile", url.absoluteString])
+        // The existing timer drains events on mpvQueue. No unretained Swift
+        // pointer is passed into mpv's arbitrary-thread wakeup callback.
+        mpvQueue.async { [weak self] in self?.command(["loadfile", self?.url.absoluteString ?? ""]) }
     }
 
     private func drainEvents() {
-        mpvQueue.async { [weak self] in
-            guard let self else { return }
-            // Capture the handle per iteration: destroy is serialized on this same queue, so a
-            // non-nil handle read here stays valid for the duration of the block.
+        // Only called on mpvQueue, as are all native reads and destruction.
+        do {
             while let handle = self.mpv {
                 guard let event = mpv_wait_event(handle, 0), event.pointee.event_id != MPV_EVENT_NONE else { break }
                 switch event.pointee.event_id {
@@ -269,7 +259,8 @@ final class MPVViewController: UIViewController, HarborPlayerController {
                             // Apple TV can be read (and screenshotted) without a Mac.
                             let line = "[\(prefix)] \(text)"
                             DispatchQueue.main.async { [weak self] in
-                                guard let m = self?.model else { return }
+                                guard let self, !self.shutdownGate.isStopping,
+                                      let m = self.model, m.owns(self) else { return }
                                 m.logLines.append(line)
                                 if m.logLines.count > 40 { m.logLines.removeFirst(m.logLines.count - 40) }
                             }
@@ -281,8 +272,17 @@ final class MPVViewController: UIViewController, HarborPlayerController {
                         if ef.reason == MPV_END_FILE_REASON_ERROR {
                             let msg = String(cString: mpv_error_string(ef.error))
                             self.log.error("end-file error: \(msg, privacy: .public)")
+                            DispatchQueue.main.async { [weak self] in
+                                guard let self, !self.shutdownGate.isStopping,
+                                      let m = self.model, m.owns(self) else { return }
+                                m.playbackError = "MPV could not play this source."
+                            }
                         } else if ef.reason == MPV_END_FILE_REASON_EOF {
-                            DispatchQueue.main.async { [weak self] in self?.model?.ended = true }
+                            DispatchQueue.main.async { [weak self] in
+                                guard let self, !self.shutdownGate.isStopping,
+                                      let m = self.model, m.owns(self) else { return }
+                                m.ended = true
+                            }
                         }
                     }
                 default: break
@@ -299,13 +299,30 @@ final class MPVViewController: UIViewController, HarborPlayerController {
         let pos = getDouble("time-pos")
         let dur = getDouble("duration")
         let paused = getFlag("pause")
+        let buffering = getFlag("paused-for-cache")
         let started = pos.isFinite && pos > max(0.05, startAt + 0.05)
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - lastSnapshotAt >= 1 {
+            lastSnapshotAt = now
+            let tracks = readTracks(ofType: "audio") + readTracks(ofType: "sub")
+            let summary = (height: getInt("video-params/h"),
+                           audioCodec: getString("audio-codec-name") ?? "",
+                           audioOut: getString("current-ao") ?? "")
+            let chapters = readChapters()
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.shutdownGate.isStopping else { return }
+                self.cachedTracks = tracks
+                self.cachedSummary = summary
+                self.cachedChapters = chapters
+            }
+        }
         DispatchQueue.main.async { [weak self] in
-            guard let self, let m = self.model else { return }
+            guard let self, !self.shutdownGate.isStopping, let m = self.model, m.owns(self) else { return }
             if pos.isFinite, abs(m.position - pos) > 0.08 { m.position = pos }
             if dur.isFinite, dur > 0, abs(m.duration - dur) > 0.2 { m.duration = dur }
             if dur.isFinite, dur > 0, !m.ready { m.ready = true }
-            if started { m.playbackStarted = true }
+            if started, !m.playbackStarted { m.playbackStarted = true }
+            if m.buffering != buffering { m.buffering = buffering }
             if m.paused != paused { m.paused = paused }
         }
     }
@@ -323,12 +340,15 @@ final class MPVViewController: UIViewController, HarborPlayerController {
         }
     }
 
-    /// Read the current tracks of a type (audio / sub). mpv's property getters are thread-safe, so
-    /// this reads directly on the caller (main) thread without a queue hop that could stall the UI.
+    /// Cached off-main; synchronous mpv getters can block even though thread-safe.
     func tracks(ofType type: String) -> [MPVTrack] {
+        cachedTracks.filter { $0.type == type }
+    }
+
+    private func readTracks(ofType type: String) -> [MPVTrack] {
         guard mpv != nil else { return [] }
         let count = getInt("track-list/count")
-        guard count > 0 else { return [] }
+        guard count > 0, count < 4096 else { return [] }
         var result: [MPVTrack] = []
         for i in 0..<count where (getString("track-list/\(i)/type") ?? "") == type {
             result.append(MPVTrack(
@@ -366,7 +386,7 @@ final class MPVViewController: UIViewController, HarborPlayerController {
                 self.anime4KActive = false
                 self.setString("glsl-shaders", "")
                 self.restoreRendererOptions { self.setString($0, $1) }
-                DispatchQueue.main.async { [weak self] in self?.model?.anime4KActive = false }
+                self.publishAnime4K(false)
             }
         }
     }
@@ -375,18 +395,19 @@ final class MPVViewController: UIViewController, HarborPlayerController {
     /// audio-output driver actually in use ("" = audio failed to initialize — the key diagnostic
     /// for the no-sound reports).
     func mediaSummary() -> (height: Int, audioCodec: String, audioOut: String) {
-        guard mpv != nil else { return (0, "", "") }
-        return (getInt("video-params/h"),
-                getString("audio-codec-name") ?? "",
-                getString("current-ao") ?? "")
+        cachedSummary
     }
 
     /// Named chapters exposed by mpv. They are also an offline source for Harbor's
     /// Skip Intro / Recap / Credits feature when AniSkip or TheIntroDB has no match.
     func chapters() -> [MediaChapter] {
+        cachedChapters
+    }
+
+    private func readChapters() -> [MediaChapter] {
         guard mpv != nil else { return [] }
         let count = getInt("chapter-list/count")
-        guard count > 0 else { return [] }
+        guard count > 0, count < 4096 else { return [] }
         let duration = getDouble("duration")
         var values: [(String, Double)] = []
         for index in 0..<count {
@@ -576,7 +597,15 @@ final class MPVViewController: UIViewController, HarborPlayerController {
                 log.notice("Anime4K skipped for native high-resolution input: \(height)p")
             }
         }
-        DispatchQueue.main.async { [weak self] in self?.model?.anime4KActive = willEnable }
+        publishAnime4K(willEnable)
+    }
+
+    private func publishAnime4K(_ enabled: Bool) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.shutdownGate.isStopping, let model = self.model,
+                  model.owns(self), model.anime4KActive != enabled else { return }
+            model.anime4KActive = enabled
+        }
     }
 
     /// Re-apply subtitle appearance to a running player (after a settings change).
@@ -587,26 +616,23 @@ final class MPVViewController: UIViewController, HarborPlayerController {
         }
     }
 
-    func shutdown() {
+    func shutdown(completion: @escaping @MainActor () -> Void) {
+        guard shutdownGate.begin(completion) else { return }
         poll?.cancel(); poll = nil
-        model?.anime4KActive = false
-        let deactivateAudio = model?.releaseController(self) == true
-        guard let ctx = mpv else {
-            if deactivateAudio {
-                try? AVAudioSession.sharedInstance().setActive(
-                    false, options: .notifyOthersOnDeactivation)
+        _ = model?.releaseController(self)
+        // Retain self (and therefore the CAMetalLayer + UIView) until mpv has
+        // joined its renderer threads. Dismissal may otherwise free the Vulkan
+        // drawable while the previous episode is still rendering into it.
+        mpvQueue.async { [self] in
+            if let ctx = mpv {
+                mpv = nil
+                mpv_terminate_destroy(ctx)
             }
-            return
-        }
-        // Clear the wakeup callback FIRST so it can't fire into a deallocated controller,
-        // then wind the core down now (quit is thread-safe) and destroy off-main.
-        mpv_set_wakeup_callback(ctx, nil, nil)
-        mpv_command_string(ctx, "quit")
-        mpv = nil
-        mpvQueue.async {
-            mpv_terminate_destroy(ctx)
-            if deactivateAudio {
-                try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            DispatchQueue.main.async { [self] in
+                metalLayer?.removeFromSuperlayer()
+                metalLayer = nil
+                PlaybackAudioSession.release(self)
+                shutdownGate.finish()
             }
         }
     }

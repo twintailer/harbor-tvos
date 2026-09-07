@@ -20,6 +20,11 @@ struct DetailView: View {
     /// finished dismissing. Starting it from inside PlayerView's button handler
     /// races the old decoder teardown against the next presentation on tvOS.
     @State private var pendingNextVideo: MetaItem.Video?
+    @State private var sourceChoicesAfterDismiss: [StreamOption]?
+    @State private var pickedStreamAfterDismiss: StreamOption?
+    @State private var resolutionTask: Task<Void, Never>?
+    @State private var requestGate = PlaybackRequestGate()
+    @Environment(\.dismiss) private var dismiss
     @AppStorage(SubtitleStyle.Key.instantPlay) private var instantPlay = true
     @AppStorage(SubtitleStyle.Key.rememberStream) private var rememberStream = true
     @AppStorage(SubtitleStyle.Key.resume) private var resumePlayback = true
@@ -29,16 +34,20 @@ struct DetailView: View {
     // Resolve streams for a movie or a specific episode via the user's addons,
     // then auto-play the first direct one — or show a picker.
     private func play(streamId: String, title: String, video: MetaItem.Video? = nil) {
+        guard !resolving, player == nil else { return }
         guard !auth.addons.isEmpty else { pickerStreams = []; return }
+        resolutionTask?.cancel()
+        let requestID = requestGate.begin()
         pendingStreamId = streamId
         pendingTitle = title
         pendingVideo = video
         sourceChangeStart = nil
         resolving = true
-        Task {
+        resolutionTask = Task {
             let streams = await StreamResolver.streams(
                 addons: auth.addons, type: meta.type, id: streamId)
             await MainActor.run {
+                guard !Task.isCancelled, requestGate.accepts(requestID) else { return }
                 resolving = false
                 availableStreams = streams
                 let remembered = rememberStream
@@ -160,26 +169,48 @@ struct DetailView: View {
                             watched: watchedState) { v in
                                 play(streamId: streamID(for: v), title: episodeFullTitle(v), video: v)
                             }
+                            .disabled(resolving)
                             .padding(.top, 76)
                     }
                 }
                 .padding(.horizontal, 80)
                 .padding(.bottom, 100)
             }
+            if resolving {
+                ZStack {
+                    Color.black.opacity(0.72).ignoresSafeArea()
+                    VStack(spacing: 20) {
+                        ProgressView().controlSize(.large).tint(.white)
+                        Text("Getting your stream ready")
+                            .font(.system(size: 30, weight: .bold))
+                        Text(pendingTitle).font(.system(size: 22))
+                            .foregroundStyle(HarborTVDesign.secondaryText)
+                            .lineLimit(2).multilineTextAlignment(.center)
+                        Button("Cancel") { cancelResolution() }
+                            .buttonStyle(HarborActionButtonStyle(tone: .secondary))
+                    }
+                    .padding(40).frame(maxWidth: 780)
+                    .background(HarborTVDesign.elevated, in: RoundedRectangle(cornerRadius: 24))
+                }
+                .onExitCommand { cancelResolution() }
+            }
         }
         .fullScreenCover(item: $player, onDismiss: playerDidDismiss) { target in
             PlayerView(target: target)
         }
-        .sheet(isPresented: Binding(get: { pickerStreams != nil }, set: { if !$0 { pickerStreams = nil } })) {
+        .sheet(isPresented: Binding(get: { pickerStreams != nil }, set: { if !$0 { pickerStreams = nil } }),
+               onDismiss: streamPickerDidDismiss) {
             StreamsView(title: meta.name, streams: pickerStreams ?? []) { s in
+                guard pickedStreamAfterDismiss == nil else { return }
+                pickedStreamAfterDismiss = s
                 pickerStreams = nil
-                let startOverride = sourceChangeStart
-                sourceChangeStart = nil
-                if rememberStream { UserDefaults.standard.set(s.id, forKey: lastStreamKey(pendingStreamId)) }
-                open(stream: s, streamId: pendingStreamId,
-                     title: pendingTitle.isEmpty ? meta.name : pendingTitle,
-                     video: pendingVideo, startOverride: startOverride)
             }
+        }
+        .onExitCommand {
+            if resolving { cancelResolution() } else { dismiss() }
+        }
+        .onDisappear {
+            if player == nil, pickerStreams == nil { cancelResolution() }
         }
         .alert("Stream unavailable", isPresented: Binding(
             get: { streamError != nil }, set: { if !$0 { streamError = nil } })) {
@@ -191,6 +222,7 @@ struct DetailView: View {
             if full == nil {
                 full = await AddonService.meta(addons: auth.addons, type: item.type, id: item.id)
             }
+            guard !Task.isCancelled else { return }
             // A user meta addon may serve rich text/art but no episode list. Series need
             // episodes to be playable, so backfill videos from Cinemeta when they're missing.
             if item.type == "series", (full?.videos ?? []).isEmpty,
@@ -283,6 +315,9 @@ struct DetailView: View {
 
     private func open(stream: StreamOption, streamId: String, title: String,
                       video: MetaItem.Video?, startOverride: Double? = nil) {
+        guard player == nil else { return }
+        resolutionTask?.cancel()
+        let requestID = requestGate.begin()
         if let raw = stream.url, let url = URL(string: raw) {
             player = makeTarget(stream: stream, resolvedURL: url, streamId: streamId,
                                 title: title, video: video, startOverride: startOverride)
@@ -293,10 +328,11 @@ struct DetailView: View {
             return
         }
         resolving = true
-        Task {
+        resolutionTask = Task {
             let result = await TorrServerService.resolve(infoHash: hash, season: video?.season,
                                                          episode: video?.episode)
             await MainActor.run {
+                guard !Task.isCancelled, requestGate.accepts(requestID) else { return }
                 resolving = false
                 switch result {
                 case .success(let url):
@@ -342,15 +378,9 @@ struct DetailView: View {
             episode: video?.episode,
             requestHeaders: stream.requestHeaders,
             onProgress: { position, duration in
-                guard let key = auth.authKey else { return }
-                Task {
-                    await StremioService.saveProgress(
-                        authKey: key, meta: meta, videoId: streamId,
-                        season: video?.season, episode: video?.episode,
-                        position: position, duration: duration, existing: libItem)
-                    await auth.loadLibrary()
-                    await auth.loadContinueWatching()
-                }
+                auth.savePlaybackProgress(meta: meta, videoId: streamId,
+                    season: video?.season, episode: video?.episode,
+                    position: position, duration: duration, existing: libItem)
             },
             onEnded: playNext,
             onChangeSource: sourceChoices.count > 1 ? { position in
@@ -358,26 +388,47 @@ struct DetailView: View {
                 pendingTitle = title
                 pendingVideo = video
                 sourceChangeStart = position
-                Task { @MainActor in
-                    // Let fullScreenCover finish dismissing before presenting the
-                    // source sheet; otherwise tvOS drops the second presentation.
-                    try? await Task.sleep(nanoseconds: 450_000_000)
-                    pickerStreams = sourceChoices
-                }
-            } : nil)
+                sourceChoicesAfterDismiss = sourceChoices
+            } : nil,
+            nextEpisodeTitle: next.map { episodeFullTitle($0) })
     }
 
     private func playerDidDismiss() {
-        guard let next = pendingNextVideo else { return }
+        if let choices = sourceChoicesAfterDismiss {
+            sourceChoicesAfterDismiss = nil
+            pickerStreams = choices
+            return
+        }
+        guard let next = pendingNextVideo else {
+            Task {
+                await auth.refreshAfterPlayback()
+                libItem = auth.libraryItems.first { $0._id == meta.id }
+            }
+            return
+        }
         pendingNextVideo = nil
         let id = streamID(for: next)
-        // onDismiss runs after the presentation is gone. Yielding once lets the
-        // representable dismantle its native decoder before a cached resolver can
-        // immediately install the next PlayerView.
-        Task { @MainActor in
-            await Task.yield()
-            play(streamId: id, title: episodeFullTitle(next), video: next)
-        }
+        // PlayerView has already awaited decoder shutdown; UIKit has now also
+        // removed the cover. No guessed sleep or overlapping presentations.
+        selectedSeason = next.season
+        play(streamId: id, title: episodeFullTitle(next), video: next)
+    }
+
+    private func streamPickerDidDismiss() {
+        guard let stream = pickedStreamAfterDismiss else { sourceChangeStart = nil; return }
+        pickedStreamAfterDismiss = nil
+        let startOverride = sourceChangeStart
+        sourceChangeStart = nil
+        open(stream: stream, streamId: pendingStreamId,
+             title: pendingTitle.isEmpty ? meta.name : pendingTitle,
+             video: pendingVideo, startOverride: startOverride)
+    }
+
+    private func cancelResolution() {
+        resolutionTask?.cancel()
+        resolutionTask = nil
+        requestGate.cancel()
+        resolving = false
     }
 
     private func nextEpisode(after video: MetaItem.Video) -> MetaItem.Video? {
@@ -438,6 +489,7 @@ struct SeriesEpisodes: View {
     @Binding var selectedSeason: Int
     let watched: (MetaItem.Video) -> EpisodeProgress
     let onPlay: (MetaItem.Video) -> Void
+    @State private var visibleEpisodeCount = 30
 
     @AppStorage(SubtitleStyle.Key.episodeSort) private var episodeSort = "aired"
     @AppStorage(SubtitleStyle.Key.episodeLayout) private var episodeLayout = "list"
@@ -498,13 +550,12 @@ struct SeriesEpisodes: View {
                 .buttonStyle(HarborActionButtonStyle(tone: .quiet))
             }
 
-            // Plain VStack, NOT LazyVStack: the tvOS focus engine can only move to views
-            // that exist, and lazy rows below the fold are never instantiated — which made
-            // the episode list unreachable ("can't go down"). Capped for render cost.
+            // Keep a bounded, focusable batch. "Show more" lets long anime reach
+            // every episode without constructing hundreds of artwork views up front.
             if episodeLayout == "strip" {
                 ScrollView(.horizontal) {
                     LazyHStack(alignment: .top, spacing: 28) {
-                        ForEach(Array(episodesInSeason.prefix(200).enumerated()), id: \.offset) { _, video in
+                        ForEach(Array(episodesInSeason.prefix(visibleEpisodeCount).enumerated()), id: \.offset) { _, video in
                             EpisodeStripCard(video: video, progress: watched(video)) { onPlay(video) }
                         }
                     }
@@ -512,10 +563,17 @@ struct SeriesEpisodes: View {
                 }
             } else {
                 VStack(alignment: .leading, spacing: 6) {
-                    ForEach(Array(episodesInSeason.prefix(200).enumerated()), id: \.offset) { _, v in
+                    ForEach(Array(episodesInSeason.prefix(visibleEpisodeCount).enumerated()), id: \.offset) { _, v in
                         EpisodeRowTV(meta: meta, video: v, progress: watched(v)) { onPlay(v) }
                     }
                 }
+            }
+            if episodesInSeason.count > visibleEpisodeCount {
+                Button("Show more episodes (\(episodesInSeason.count - visibleEpisodeCount) remaining)") {
+                    visibleEpisodeCount += 30
+                }
+                .buttonStyle(HarborActionButtonStyle(tone: .secondary))
+                .padding(.top, 14)
             }
             if episodesInSeason.isEmpty {
                 Text(episodeSort == "absolute" ? "No episodes available in absolute order." : "No episodes listed for this season.")
@@ -523,6 +581,8 @@ struct SeriesEpisodes: View {
             }
         }
         .frame(maxWidth: 1400, alignment: .leading)
+        .onChange(of: selectedSeason) { _, _ in visibleEpisodeCount = 30 }
+        .onChange(of: episodeSort) { _, _ in visibleEpisodeCount = 30 }
     }
 
     private func releaseDate(_ raw: String?) -> Date? {

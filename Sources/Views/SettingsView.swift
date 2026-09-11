@@ -188,7 +188,6 @@ private struct SettingsPages<Content: View>: View {
             .focusSection()
             List { content() }
                 .id(selection)
-                .scrollContentBackground(.hidden)
                 .focusSection()
         }
         .background(HarborStageBackground())

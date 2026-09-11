@@ -97,10 +97,10 @@ private struct HarborDesktopHero: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            HarborArtworkImage(url: item.background ?? item.poster, maxPixelSize: 2200)
+            HarborPreviewArtwork(item: item, maxPixelSize: 2200, hero: true)
                 .id(item.contentKey)
                 .frame(maxWidth: .infinity)
-                    .frame(height: 520)
+                .frame(height: 520)
 
             LinearGradient(
                 stops: [
@@ -386,17 +386,15 @@ private struct HarborCatalogArtwork: View {
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
-            HarborArtworkImage(url: item.poster, maxPixelSize: 640, fallbackText: item.name)
             if wide {
-                if let background = item.background {
-                    // Keep the already decoded poster behind a loading backdrop.
-                    HarborArtworkImage(url: background, maxPixelSize: 1000)
-                }
+                HarborPreviewArtwork(item: item, maxPixelSize: 1200)
                 LinearGradient(colors: [.clear, .black.opacity(0.86)],
                                startPoint: .center, endPoint: .bottom)
                 Text(item.name)
                     .font(.system(size: 29, weight: .bold))
                     .lineLimit(2).padding(22)
+            } else {
+                HarborArtworkImage(url: item.poster, maxPixelSize: 640, fallbackText: item.name)
             }
         }
         .frame(width: wide ? 480 : 180, height: 270)

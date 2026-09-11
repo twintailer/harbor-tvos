@@ -285,10 +285,7 @@ struct HarborLandscapeCard: View {
         VStack(alignment: .leading, spacing: 10) {
             NavigationLink(value: item) {
                 ZStack(alignment: .bottomLeading) {
-                    HarborArtworkImage(url: item.background ?? item.poster,
-                                       maxPixelSize: 900,
-                                       fallbackText: item.name,
-                                       showProgress: true)
+                    HarborPreviewArtwork(item: item, maxPixelSize: 1200)
                         .frame(width: width, height: height)
 
                     LinearGradient(colors: [.clear, .black.opacity(0.86)],

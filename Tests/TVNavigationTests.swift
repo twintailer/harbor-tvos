@@ -21,6 +21,12 @@ struct TVNavigationTests {
                "Top tabs have unique focus identities")
         let reachable = Set(HarborSection.topTabs + [.discover, .addons, .settings])
         expect(reachable == Set(HarborSection.allCases), "Every section remains reachable")
+        for section in HarborSection.topTabs + [.settings] {
+            expect(HarborNavigationItem.section(section).destination == section,
+                   "Focusing a page tab selects that destination without pressing OK")
+        }
+        expect(HarborNavigationItem.more.destination == nil,
+               "Moving onto More must not open Discover or replace the current page")
 
         let titles = ["movie:a", "movie:b", "series:a"]
         var previous: String?

@@ -12,6 +12,7 @@ struct HarborTVApp: App {
 
     init() {
         HarborSettings.registerDefaults()
+        Task.detached(priority: .utility) { MetadataText.prepare() }
         // Keep enough headroom for VideoToolbox + Anime4K. Oversized artwork/network
         // caches can force tvOS memory pressure and turn focus animations into hitches.
         URLCache.shared.memoryCapacity = 32 * 1024 * 1024
@@ -40,7 +41,7 @@ struct RootView: View {
     @AppStorage(SubtitleStyle.Key.interfaceStyle) private var interfaceStyle = "harbor"
     @State private var selection: HarborSection = .home
     @State private var detailIsOpen = false
-    @FocusState private var navigationFocus: HarborSection?
+    @FocusState private var navigationFocus: HarborNavigationItem?
 
     var body: some View {
         ZStack {
@@ -49,23 +50,32 @@ struct RootView: View {
                 .id(selection)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .focusSection()
-                .safeAreaInset(edge: .top, spacing: 0) {
-                    if !detailIsOpen {
-                        HarborTopNavigation(selection: selection, focus: $navigationFocus, onSelected: select)
-                            .focusSection()
-                            .modifier(HarborRootBackAction(action: rootBackAction))
-                    }
-                }
+        }
+        // Keep the navigation outside the replaced destination. Moving between
+        // tabs must not destroy the currently focused button.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if !detailIsOpen {
+                HarborTopNavigation(selection: selection, focus: $navigationFocus, onSelected: select)
+                    .focusSection()
+                    .onExitCommand(perform: rootBackAction)
+            }
         }
         .onPreferenceChange(HarborDetailNavigationKey.self) { detailIsOpen = $0 }
         .tint(HarborTVDesign.accent(interfaceStyle: interfaceStyle, fallback: accent))
         .preferredColorScheme(.dark)
-        .defaultFocus($navigationFocus, .home)
+        .defaultFocus($navigationFocus, .section(.home))
+        .onChange(of: navigationFocus) { _, item in
+            guard !detailIsOpen, let section = item?.destination else { return }
+            select(section)
+        }
     }
 
     private var rootBackAction: (() -> Void)? {
         guard let parent = selection.backDestination else { return nil }
-        return { select(parent) }
+        return {
+            select(parent)
+            navigationFocus = .section(parent)
+        }
     }
 
     private func select(_ section: HarborSection) {
@@ -94,16 +104,6 @@ struct RootView: View {
     }
 }
 
-/// Do not install an empty handler at Home: it would still consume the remote
-/// event. No exit(0), suspend selector or synthetic button events are needed.
-struct HarborRootBackAction: ViewModifier {
-    let action: (() -> Void)?
-    @ViewBuilder func body(content: Content) -> some View {
-        if let action { content.onExitCommand(perform: action) }
-        else { content }
-    }
-}
-
 /// Hide the global navigation on pushed details/settings pages. Their own
 /// NavigationStack then owns Back, including nested language pickers.
 struct HarborDetailNavigationKey: PreferenceKey {
@@ -113,7 +113,7 @@ struct HarborDetailNavigationKey: PreferenceKey {
 
 private struct HarborTopNavigation: View {
     let selection: HarborSection
-    var focus: FocusState<HarborSection?>.Binding
+    var focus: FocusState<HarborNavigationItem?>.Binding
     let onSelected: (HarborSection) -> Void
 
     var body: some View {
@@ -139,7 +139,7 @@ private struct HarborTopNavigation: View {
                         } else { Text(section.label).lineLimit(1).fixedSize() }
                     }
                     .buttonStyle(HarborNavigationTabStyle(selected: selection == section, compact: compact))
-                    .focused(focus, equals: section)
+                    .focused(focus, equals: .section(section))
                     .accessibilityLabel(section.label)
                     .accessibilityIdentifier("navigation.\(section.rawValue)")
                 }
@@ -152,14 +152,14 @@ private struct HarborTopNavigation: View {
                 Image(systemName: "ellipsis").frame(width: 24)
             }
             .buttonStyle(HarborNavigationTabStyle(selected: selection == .discover || selection == .addons, compact: compact))
-            .focused(focus, equals: .discover)
+            .focused(focus, equals: .more)
             .accessibilityLabel("More: Discover and Add-ons")
             .accessibilityIdentifier("navigation.more")
             Button { onSelected(.settings) } label: {
                 Image(systemName: "gearshape").frame(width: 24)
             }
             .buttonStyle(HarborNavigationTabStyle(selected: selection == .settings, compact: compact))
-            .focused(focus, equals: .settings)
+            .focused(focus, equals: .section(.settings))
             .accessibilityLabel("Settings")
             .accessibilityIdentifier("navigation.settings")
         }

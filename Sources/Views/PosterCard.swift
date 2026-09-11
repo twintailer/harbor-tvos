@@ -110,10 +110,12 @@ struct ContinueCard: View {
         VStack(alignment: .leading, spacing: 12) {
             NavigationLink(value: entry.meta) {
                 ZStack(alignment: .bottomLeading) {
-                    HarborArtworkImage(url: compact ? entry.meta.poster : (entry.meta.background ?? entry.meta.poster),
-                                       maxPixelSize: compact ? 640 : 1000)
-                    .frame(width: width, height: height)
-                    .clipShape(RoundedRectangle(cornerRadius: posterRadius, style: .continuous))
+                    if compact {
+                        HarborArtworkImage(url: entry.meta.poster, maxPixelSize: 640,
+                                           fallbackText: entry.meta.name)
+                    } else {
+                        HarborPreviewArtwork(item: entry.meta, maxPixelSize: 1200)
+                    }
 
                     LinearGradient(colors: [.clear, .black.opacity(0.75)],
                                    startPoint: .center, endPoint: .bottom)

@@ -38,6 +38,17 @@ enum HarborSection: String, CaseIterable, Identifiable {
     }
 }
 
+/// The More menu is a focus target, but it is not a destination page.
+enum HarborNavigationItem: Hashable {
+    case section(HarborSection)
+    case more
+
+    var destination: HarborSection? {
+        guard case let .section(section) = self else { return nil }
+        return section
+    }
+}
+
 enum TVFocusPresentation {
     /// Call with a settled focus to select a title; nil preserves the last title
     /// while focus moves into navigation, another rail or a detail page.

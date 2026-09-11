@@ -157,6 +157,7 @@ actor HarborArtworkCache {
 
 struct HarborArtworkImage: View {
     let url: String?
+    var fallbackURL: String? = nil
     var contentMode: ContentMode = .fill
     var maxPixelSize: CGFloat = 1600
     var fallbackText: String? = nil
@@ -166,24 +167,29 @@ struct HarborArtworkImage: View {
     @State private var finished = false
     @State private var loadedKey: String?
 
-    private var requestKey: String { "\(url ?? "")|\(maxPixelSize)" }
+    private var requestKey: String { "\(url ?? "")|\(fallbackURL ?? "")|\(maxPixelSize)" }
 
     var body: some View {
-        ZStack {
-            Color.white.opacity(0.055)
-            if let image {
-                Image(uiImage: image).resizable().aspectRatio(contentMode: contentMode)
-            } else if showProgress && !finished {
-                ProgressView()
-            } else if let fallbackText, finished {
-                Text(fallbackText)
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.58))
-                    .multilineTextAlignment(.center)
-                    .padding(8)
+        GeometryReader { geometry in
+            ZStack {
+                Color.white.opacity(0.055)
+                if let image {
+                    Image(uiImage: image).resizable().aspectRatio(contentMode: contentMode)
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                } else if showProgress && !finished {
+                    ProgressView()
+                } else if let fallbackText, finished {
+                    Text(fallbackText)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.58))
+                        .multilineTextAlignment(.center)
+                        .padding(8)
+                }
             }
+            // Decoded image dimensions must not grow the card's layout bounds.
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .clipped()
         }
-        .clipped()
         .onDisappear {
             // Lazy stacks may retain their row's State long after it scrolls away.
             // Let the bounded shared cache, not every visited card, own that image.
@@ -195,12 +201,42 @@ struct HarborArtworkImage: View {
             loadedKey = nil
             image = nil
             finished = false
-            let loaded = await HarborArtworkCache.shared.image(for: url,
-                                                                 maxPixelSize: maxPixelSize)
+            var loaded = await HarborArtworkCache.shared.image(for: url,
+                                                               maxPixelSize: maxPixelSize)
+            if loaded == nil, !Task.isCancelled, let fallbackURL, fallbackURL != url {
+                loaded = await HarborArtworkCache.shared.image(for: fallbackURL,
+                                                              maxPixelSize: maxPixelSize)
+            }
             guard !Task.isCancelled else { return }
             image = loaded
             if loaded != nil { loadedKey = requestKey }
             finished = true
         }
+    }
+}
+
+/// Wide previews show the complete artwork. A poster fallback stays proportional
+/// instead of enlarging a narrow crop to fill a landscape card.
+struct HarborPreviewArtwork: View {
+    let item: MetaItem
+    var maxPixelSize: CGFloat = 1600
+    var hero = false
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .trailing) {
+                LinearGradient(colors: [HarborTVDesign.canvas, HarborTVDesign.elevated],
+                               startPoint: .leading, endPoint: .trailing)
+                HarborArtworkImage(url: item.background, fallbackURL: item.poster,
+                                   contentMode: .fit, maxPixelSize: maxPixelSize,
+                                   fallbackText: item.name)
+                    // A hero has a dedicated 16:9 art area beside its synopsis.
+                    .frame(width: hero ? min(geometry.size.width, geometry.size.height * 16 / 9)
+                                       : geometry.size.width,
+                           height: geometry.size.height)
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height)
+        }
+        .accessibilityHidden(true)
     }
 }

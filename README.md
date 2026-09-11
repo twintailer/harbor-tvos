@@ -34,13 +34,19 @@ hardware verification. A successful compile or logic test is not a device soak t
 - MPVKit-GPL 1.0 playback for HLS, MKV, HDR, multichannel audio and embedded
   tracks, using the tvOS AVFoundation audio output with AudioUnit fallback
 - A top navigation bar for Search, Home, Series, Movies, Anime, Catalogs and
-  My Harbor, with Discover/Add-ons in More and direct access to Settings
+  My Harbor, with Discover/Add-ons in More and direct access to Settings.
+  Focusing a page tab selects it immediately, without an extra OK press
 - Reference-matched Liquid Glass player chrome with floating speed, subtitle,
   audio, aspect and Anime4K menus
 - Back on Home returns to the Apple TV Home screen. Other top-level sections
   return to Harbor Home; details and settings subpages go back one level
 - Focus selects the wide preview in catalog and Continue Watching rows, with
   matching artwork/synopsis and retained selection after leaving a row
+- Wide previews preserve the complete picture, prefer backdrops and fall back to
+  a proportional poster if the backdrop is missing or cannot be downloaded
+- German metadata display restores recognized spellings such as Koenig → König.
+  Original provider text, IDs and image URLs remain unchanged; unknown words,
+  ambiguous spellings and protected names keep their original spelling
 - MPV and VLC playback engines (MPV/Anime4K default, TVVLCKit compatibility fallback)
 - Harbor, Orivio Max-inspired Midnight and Orivio Netflix-inspired Cinema styles
 - Window-level player Back handling and auto-closing track/speed menus
@@ -69,7 +75,7 @@ The GitHub workflow builds an unsigned tvOS IPA on a macOS runner:
 gh workflow run tvos-build.yml
 ```
 
-Artifact: `harbor-tvos` → `Harbor_tvOS_0.4.4_unsigned.ipa`.
+Artifact: `harbor-tvos` → `Harbor_tvOS_0.4.5_unsigned.ipa`.
 
 The workflow uses the standard `macos-latest` runner in the public repository;
 it does not consume private-repository included minutes. A public-only job guard
@@ -94,6 +100,10 @@ swiftc -swift-version 5 -parse-as-library Sources/Models/TVNavigation.swift \
 The navigation rules and Swift syntax can be checked without Xcode. A full tvOS
 build still needs the Apple TV SDK; focus geometry, the system Home transition
 and layout need simulator/device verification with the Siri Remote.
+
+The workflow also runs `Tests/MetadataTextTests.swift` against the bundled German
+display lexicon. Its pinned source, license and regeneration instructions are in
+`Resources/MetadataText/README.md`.
 
 For a local build on macOS, install Pillow and XcodeGen, then run
 `python3 scripts/generate-assets.py`, `bash scripts/fetch-anime4k.sh` and

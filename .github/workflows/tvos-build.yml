@@ -46,10 +46,18 @@ jobs:
         run: |
           swiftc -swift-version 5 -parse-as-library \
             Sources/Services/PlaybackLifecycle.swift Sources/Models/PlaybackTypes.swift \
-            Sources/Models/Models.swift Sources/Services/EpisodeOrder.swift \
+            Sources/Models/Models.swift Sources/Models/MetadataText.swift Sources/Services/EpisodeOrder.swift \
             Sources/Views/PlayerModel.swift Tests/PlaybackLifecycleTests.swift \
             -o /tmp/harbor-playback-tests
           /tmp/harbor-playback-tests
+
+      - name: Metadata text regression tests
+        run: |
+          cp -R Resources/MetadataText /tmp/MetadataText
+          swiftc -swift-version 5 -parse-as-library \
+            Sources/Models/MetadataText.swift Sources/Models/Models.swift Tests/MetadataTextTests.swift \
+            -o /tmp/harbor-metadata-tests
+          /tmp/harbor-metadata-tests
 
       - name: Install build tools
         run: |
@@ -98,7 +106,7 @@ jobs:
           test -n "$APP"
           mkdir -p Payload dist
           cp -R "$APP" Payload/
-          zip -r -q "dist/Harbor_tvOS_0.4.4_unsigned.ipa" Payload
+          zip -r -q "dist/Harbor_tvOS_0.4.5_unsigned.ipa" Payload
           ls -la dist
 
       - name: Upload IPA artifact

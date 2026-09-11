@@ -32,6 +32,9 @@ targets:
       - path: Resources/Anime4K
         type: folder
         buildPhase: resources
+      - path: Resources/MetadataText
+        type: folder
+        buildPhase: resources
     dependencies:
       - package: MPVKit
         product: MPVKit-GPL
@@ -43,8 +46,8 @@ targets:
       path: Info.plist
       properties:
         CFBundleDisplayName: Harbor
-        CFBundleShortVersionString: "0.4.4"
-        CFBundleVersion: "19"
+        CFBundleShortVersionString: "0.4.5"
+        CFBundleVersion: "20"
         UIRequiredDeviceCapabilities: [arm64]
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true

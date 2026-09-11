@@ -33,12 +33,14 @@ hardware verification. A successful compile or logic test is not a device soak t
   sources, Harbor ranking and safety filtering
 - MPVKit-GPL 1.0 playback for HLS, MKV, HDR, multichannel audio and embedded
   tracks, using the tvOS AVFoundation audio output with AudioUnit fallback
-- Left-side tvOS navigation matching Harbor's desktop sections instead of a
-  top tab strip
+- A top navigation bar for Search, Home, Series, Movies, Anime, Catalogs and
+  My Harbor, with Discover/Add-ons in More and direct access to Settings
 - Reference-matched Liquid Glass player chrome with floating speed, subtitle,
   audio, aspect and Anime4K menus
-- Deterministic one-column sidebar focus: Back opens the rail, Left/Right or
-  Back closes it, and Up/Down stays in reading order
+- Back on Home returns to the Apple TV Home screen. Other top-level sections
+  return to Harbor Home; details and settings subpages go back one level
+- Focus selects the wide preview in catalog and Continue Watching rows, with
+  matching artwork/synopsis and retained selection after leaving a row
 - MPV and VLC playback engines (MPV/Anime4K default, TVVLCKit compatibility fallback)
 - Harbor, Orivio Max-inspired Midnight and Orivio Netflix-inspired Cinema styles
 - Window-level player Back handling and auto-closing track/speed menus
@@ -47,9 +49,9 @@ hardware verification. A successful compile or logic test is not a device soak t
 - Optional torrent playback through a user-hosted TorrServer
 - Resume/progress sync, next-episode playback, independent seek steps, playback
   speed, audio/subtitle selection and aspect controls
-- tvOS-native settings in the same group order as Harbor desktop/Android:
-  library, streaming, player, video tuning, Anime4K, player layout, languages,
-  theme and advanced
+- A settings dashboard with seven categories and at most six tiles per category.
+  Quick access opens common settings directly; longer panels use short pages for
+  playback, audio, intro skip, subtitle styling, library, video and appearance
 - Anime4K GLSL shaders bundled from a pinned upstream revision, with Harbor's
   modes and performance/high-quality tiers
 - Session tokens stored in the tvOS Keychain
@@ -67,7 +69,7 @@ The GitHub workflow builds an unsigned tvOS IPA on a macOS runner:
 gh workflow run tvos-build.yml
 ```
 
-Artifact: `harbor-tvos` → `Harbor_tvOS_0.4.2_unsigned.ipa`.
+Artifact: `harbor-tvos` → `Harbor_tvOS_0.4.4_unsigned.ipa`.
 
 The workflow uses the standard `macos-latest` runner in the public repository;
 it does not consume private-repository included minutes. A public-only job guard
@@ -78,6 +80,20 @@ Before building, the workflow compiles and runs `Tests/PlaybackLifecycleTests.sw
 against the production lifecycle types and `PlayerModel`. It checks duplicate stops,
 late callbacks, rapid cancellation, overlapping exit/engine switches, audio ownership
 and directional remote navigation without requiring a simulator.
+
+`Tests/TVNavigationTests.swift` also checks root Back policy, preview selection
+through focus changes/pagination/removal, and complete settings navigation within
+the dashboard's six-tile budget. These pure rules can run on Linux as well:
+
+```sh
+swiftc -swift-version 5 -parse-as-library Sources/Models/TVNavigation.swift \
+  Tests/TVNavigationTests.swift -o /tmp/harbor-navigation-tests
+/tmp/harbor-navigation-tests
+```
+
+The navigation rules and Swift syntax can be checked without Xcode. A full tvOS
+build still needs the Apple TV SDK; focus geometry, the system Home transition
+and layout need simulator/device verification with the Siri Remote.
 
 For a local build on macOS, install Pillow and XcodeGen, then run
 `python3 scripts/generate-assets.py`, `bash scripts/fetch-anime4k.sh` and

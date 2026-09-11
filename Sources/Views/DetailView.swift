@@ -160,6 +160,7 @@ struct DetailView: View {
         .onChange(of: resolving) { _, active in
             cancelFocused = active
         }
+        .preference(key: HarborDetailNavigationKey.self, value: true)
         .onChange(of: focusedAction) { _, action in
             if action != nil { browsingEpisodes = false }
         }

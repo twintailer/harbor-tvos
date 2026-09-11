@@ -35,6 +35,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: TV navigation regression tests
+        run: |
+          swiftc -swift-version 5 -parse-as-library \
+            Sources/Models/TVNavigation.swift Tests/TVNavigationTests.swift \
+            -o /tmp/harbor-navigation-tests
+          /tmp/harbor-navigation-tests
+
       - name: Playback lifecycle regression tests
         run: |
           swiftc -swift-version 5 -parse-as-library \
@@ -91,7 +98,7 @@ jobs:
           test -n "$APP"
           mkdir -p Payload dist
           cp -R "$APP" Payload/
-          zip -r -q "dist/Harbor_tvOS_0.4.3_unsigned.ipa" Payload
+          zip -r -q "dist/Harbor_tvOS_0.4.4_unsigned.ipa" Payload
           ls -la dist
 
       - name: Upload IPA artifact

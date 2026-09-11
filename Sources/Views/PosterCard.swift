@@ -96,20 +96,22 @@ struct ImdbBadge: View {
 /// episode info on a bottom gradient, and a thin progress bar along the bottom edge.
 struct ContinueCard: View {
     let entry: CwItem
+    let focus: FocusState<String?>.Binding
     var width: CGFloat = 400
+    var compact = false
     var onRemove: (() -> Void)? = nil
     @AppStorage(SubtitleStyle.Key.accent) private var accent = "green"
     @AppStorage(SubtitleStyle.Key.posterRadius) private var posterRadius = 12.0
     @AppStorage(SubtitleStyle.Key.interfaceStyle) private var interfaceStyle = "harbor"
 
-    private var height: CGFloat { width * 9 / 16 }
+    private var height: CGFloat { compact ? width * 3 / 2 : width * 9 / 16 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             NavigationLink(value: entry.meta) {
                 ZStack(alignment: .bottomLeading) {
-                    HarborArtworkImage(url: entry.meta.background ?? entry.meta.poster,
-                                       maxPixelSize: 900)
+                    HarborArtworkImage(url: compact ? entry.meta.poster : (entry.meta.background ?? entry.meta.poster),
+                                       maxPixelSize: compact ? 640 : 1000)
                     .frame(width: width, height: height)
                     .clipShape(RoundedRectangle(cornerRadius: posterRadius, style: .continuous))
 
@@ -117,9 +119,11 @@ struct ContinueCard: View {
                                    startPoint: .center, endPoint: .bottom)
 
                     VStack(alignment: .leading, spacing: 10) {
-                        Text(entry.meta.name)
-                            .font(.system(size: width > 500 ? 32 : 25, weight: .bold))
-                            .lineLimit(2)
+                        if !compact {
+                            Text(entry.meta.name)
+                                .font(.system(size: width > 500 ? 32 : 25, weight: .bold))
+                                .lineLimit(2)
+                        }
                         HStack(spacing: 6) {
                             Image(systemName: "play.fill").font(.system(size: 12, weight: .bold))
                             if let s = entry.season, let e = entry.episode {
@@ -158,6 +162,7 @@ struct ContinueCard: View {
                                                accent: focusColor,
                                                scale: 1.06,
                                                reduceMotion: false))
+            .focused(focus, equals: entry.id)
             .contextMenu {
                 if let onRemove {
                     Button(role: .destructive, action: onRemove) {
@@ -165,12 +170,15 @@ struct ContinueCard: View {
                     }
                 }
             }
+            .accessibilityIdentifier("continue.title.\(entry.id)")
+            .accessibilityValue(compact ? "Poster" : "Expanded preview")
 
             HStack(spacing: 10) {
-                if let season = entry.season, let episode = entry.episode {
+                if compact { Text(entry.meta.name) }
+                else if let season = entry.season, let episode = entry.episode {
                     Text("Season \(season) · Episode \(episode)")
                 } else { Text(entry.meta.name) }
-                if let remaining = entry.remainingSeconds, remaining.isFinite,
+                if !compact, let remaining = entry.remainingSeconds, remaining.isFinite,
                    remaining > 0, remaining < Double(Int.max) * 60 {
                     Text("·").foregroundStyle(HarborTVDesign.tertiaryText)
                     Text("\(Int(ceil(remaining / 60))) min left")

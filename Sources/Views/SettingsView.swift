@@ -1,109 +1,198 @@
 import Foundation
 import SwiftUI
 
-// Native tvOS counterpart of Harbor's settings shell. The category order follows
-// desktop/Android, while desktop-only window, tray and keyboard sections are omitted.
-// Every control in this file is backed by a consumer in the tvOS UI, stream picker or mpv.
+// TV settings use a category dashboard and short pages within each panel.
+// Persistent setting keys stay shared with the existing playback and browsing consumers.
 struct SettingsView: View {
     var onRootBack: () -> Void = {}
+    @State private var category: SettingsCategory = .quick
+    @FocusState private var focusedCategory: SettingsCategory?
+    @FocusState private var focusedRoute: SettingsRoute?
+    @State private var lastRoutes: [SettingsCategory: SettingsRoute] = [:]
 
     var body: some View {
         NavigationStack {
-            List {
-                Section {
-                    NavigationLink { GetStartedPanel() } label: {
-                        settingsRow("Get started", icon: "safari")
+            GeometryReader { geometry in
+                VStack(alignment: .leading, spacing: 24) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("Settings").font(.system(size: 42, weight: .bold))
+                        Text("Make Harbor yours").font(.system(size: 20))
+                            .foregroundStyle(HarborTVDesign.secondaryText)
+                        Spacer()
                     }
-                }
+                    HStack(alignment: .top, spacing: 42) {
+                        VStack(spacing: 7) {
+                            ForEach(SettingsCategory.allCases) { item in
+                                Button {
+                                    category = item
+                                    focusedRoute = lastRoutes[item] ?? item.routes.first
+                                } label: {
+                                    Label(item.title, systemImage: item.icon)
+                                        .font(.system(size: 21, weight: .semibold))
+                                        .frame(maxWidth: .infinity,
+                                               minHeight: max(44, min(52, (geometry.size.height - 172) / 7)),
+                                               alignment: .leading)
+                                }
+                                .buttonStyle(SettingsCategoryStyle(selected: category == item))
+                                .focused($focusedCategory, equals: item)
+                                .accessibilityIdentifier("settings.category.\(item.rawValue)")
+                            }
+                        }
+                        .frame(width: 315)
+                        .focusSection()
+                        .onMoveCommand {
+                            if $0 == .right { focusedRoute = lastRoutes[category] ?? category.routes.first }
+                        }
 
-                Section("Account") {
-                    NavigationLink { AccountPanel() } label: {
-                        settingsRow("Account", icon: "person.crop.circle")
+                        VStack(alignment: .leading, spacing: 18) {
+                            Text(category.title).font(.system(size: 28, weight: .bold))
+                            LazyVGrid(columns: [GridItem(.flexible(), spacing: 20), GridItem(.flexible(), spacing: 20)], spacing: 20) {
+                                ForEach(category.routes) { route in
+                                    NavigationLink(value: route) {
+                                        SettingsTile(route: route,
+                                            height: max(100, min(154, (geometry.size.height - 212) / 3)))
+                                    }
+                                    .buttonStyle(HarborCardFocusStyle(radius: 22))
+                                    .focused($focusedRoute, equals: route)
+                                    .accessibilityIdentifier("settings.route.\(route.rawValue)")
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                        .focusSection()
+                        .onMoveCommand { direction in
+                            if direction == .left, let route = focusedRoute,
+                               let index = category.routes.firstIndex(of: route), index.isMultiple(of: 2) {
+                                focusedCategory = category
+                            }
+                        }
                     }
-                    NavigationLink { LibraryPanel() } label: {
-                        settingsRow("Library & metadata", icon: "books.vertical")
-                    }
-                    NavigationLink { AddonIntegrationPanel(service: "Trakt", aliases: ["trakt"]) } label: {
-                        settingsRow("Trakt", icon: "arrow.triangle.2.circlepath")
-                    }
-                    NavigationLink { AddonIntegrationPanel(service: "AniList", aliases: ["anilist"]) } label: {
-                        settingsRow("AniList", icon: "a.square")
-                    }
-                    NavigationLink { AddonIntegrationPanel(service: "MyAnimeList", aliases: ["myanimelist", "mal"]) } label: {
-                        settingsRow("MyAnimeList", icon: "m.square")
-                    }
-                    NavigationLink { AddonIntegrationPanel(service: "Simkl", aliases: ["simkl"]) } label: {
-                        settingsRow("Simkl", icon: "s.square")
-                    }
-                    NavigationLink { AddonIntegrationPanel(service: "Letterboxd", aliases: ["letterboxd", "stremboxd"]) } label: {
-                        settingsRow("Letterboxd", icon: "ellipsis")
-                    }
+                    Spacer(minLength: 0)
                 }
-
-                Section("Streaming") {
-                    NavigationLink { RelayPanel() } label: {
-                        settingsRow("Harbor Relay", icon: "antenna.radiowaves.left.and.right")
-                    }
-                    NavigationLink { StreamingSourcesPanel() } label: {
-                        settingsRow("Streaming sources", icon: "play.square.stack")
-                    }
-                    NavigationLink { StreamFiltersPanel() } label: {
-                        settingsRow("Stream filters", icon: "line.3.horizontal.decrease.circle")
-                    }
-                    NavigationLink { P2PPanel() } label: {
-                        settingsRow("P2P & servers", icon: "server.rack")
-                    }
-                }
-
-                Section("Playback") {
-                    NavigationLink { PlayerPanel() } label: {
-                        settingsRow("Player & quality", icon: "play.rectangle")
-                    }
-                    NavigationLink { VideoTuningPanel() } label: {
-                        settingsRow("Video tuning", icon: "slider.horizontal.3")
-                    }
-                    NavigationLink { AnimePanel() } label: {
-                        settingsRow("Anime tweaks", icon: "sparkles")
-                    }
-                    NavigationLink { PlayerLayoutPanel() } label: {
-                        settingsRow("Player layout", icon: "rectangle.bottomthird.inset.filled")
-                    }
-                    NavigationLink { LanguagesPanel() } label: {
-                        settingsRow("Languages", icon: "globe")
-                    }
-                }
-
-                Section("Appearance") {
-                    NavigationLink { ThemePanel() } label: {
-                        settingsRow("Theme & appearance", icon: "paintpalette")
-                    }
-                }
-
-                Section("System") {
-                    NavigationLink { AdvancedPanel() } label: {
-                        settingsRow("Advanced", icon: "wrench.and.screwdriver")
-                    }
-                }
+                .padding(.horizontal, 60).padding(.top, 22)
             }
-            .navigationTitle("Settings")
             .background(HarborStageBackground())
             .onExitCommand(perform: onRootBack)
+            .navigationDestination(for: SettingsRoute.self) { route in
+                SettingsDestinationView(route: route)
+                    .preference(key: HarborDetailNavigationKey.self, value: true)
+            }
+        }
+        .onChange(of: focusedCategory) { _, value in
+            if let value { category = value }
+        }
+        .onChange(of: focusedRoute) { _, value in
+            if let value, category.routes.contains(value) { lastRoutes[category] = value }
         }
     }
 }
 
-private func settingsRow(_ label: String, icon: String) -> some View {
-    HStack(spacing: 18) {
-        Image(systemName: icon)
-            .font(.system(size: 23, weight: .semibold))
-            .foregroundStyle(.white)
-            .frame(width: 44, height: 44)
-            .background(RoundedRectangle(cornerRadius: 12).fill(.white.opacity(0.09)))
-        Text(label)
-            .font(.system(size: 26, weight: .semibold))
-        Spacer(minLength: 0)
+private struct SettingsDestinationView: View {
+    let route: SettingsRoute
+    @ViewBuilder var body: some View {
+        switch route {
+        case .getStarted: GetStartedPanel()
+        case .account: AccountPanel()
+        case .library: LibraryPanel()
+        case .trakt: AddonIntegrationPanel(service: "Trakt", aliases: ["trakt"])
+        case .anilist: AddonIntegrationPanel(service: "AniList", aliases: ["anilist"])
+        case .mal: AddonIntegrationPanel(service: "MyAnimeList", aliases: ["myanimelist", "mal"])
+        case .simkl: AddonIntegrationPanel(service: "Simkl", aliases: ["simkl"])
+        case .letterboxd: AddonIntegrationPanel(service: "Letterboxd", aliases: ["letterboxd", "stremboxd"])
+        case .relay: RelayPanel()
+        case .sources: StreamingSourcesPanel()
+        case .filters: StreamFiltersPanel()
+        case .p2p: P2PPanel()
+        case .player: PlayerPanel()
+        case .skip: PlayerPanel(page: 3)
+        case .video: VideoTuningPanel()
+        case .anime: AnimePanel()
+        case .layout: PlayerLayoutPanel()
+        case .languages: LanguagesPanel()
+        case .subtitleBehavior: LanguagesPanel(page: 1)
+        case .subtitleStyle: LanguagesPanel(page: 2)
+        case .subtitleFont: LanguagesPanel(page: 3)
+        case .subtitlePosition: LanguagesPanel(page: 4)
+        case .subtitleColors: LanguagesPanel(page: 5)
+        case .theme: ThemePanel()
+        case .advanced: AdvancedPanel()
+        }
     }
-    .padding(.vertical, 5)
+}
+
+private struct SettingsTile: View {
+    let route: SettingsRoute
+    let height: CGFloat
+    @Environment(\.isFocused) private var focused
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 22) {
+            Image(systemName: route.icon)
+                .font(.system(size: 32, weight: .light))
+                .frame(width: 48)
+                .foregroundStyle(.white.opacity(focused ? 1 : 0.72))
+            VStack(alignment: .leading, spacing: 8) {
+                Text(route.title).font(.system(size: height < 130 ? 21 : 25, weight: .semibold)).lineLimit(2)
+                Text(route.subtitle).font(.system(size: height < 130 ? 16 : 18))
+                    .foregroundStyle(HarborTVDesign.secondaryText).lineLimit(height < 130 ? 1 : 2)
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right").font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(HarborTVDesign.tertiaryText)
+        }
+        .padding(.horizontal, 24)
+        .frame(maxWidth: .infinity, minHeight: height, maxHeight: height, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 22).fill(.white.opacity(focused ? 0.13 : 0.055)))
+    }
+}
+
+private struct SettingsCategoryStyle: ButtonStyle {
+    let selected: Bool
+    func makeBody(configuration: Configuration) -> some View {
+        SettingsCategoryBody(configuration: configuration, selected: selected)
+    }
+}
+
+private struct SettingsCategoryBody: View {
+    let configuration: ButtonStyle.Configuration
+    let selected: Bool
+    @Environment(\.isFocused) private var focused
+    var body: some View {
+        configuration.label.padding(.horizontal, 16)
+            .foregroundStyle(focused ? .black : .white.opacity(selected ? 1 : 0.65))
+            .background(RoundedRectangle(cornerRadius: 16)
+                .fill(focused ? .white : (selected ? .white.opacity(0.10) : .clear)))
+    }
+}
+
+/// Each page contains one short group, not the entire desktop settings column.
+/// The page selector stays fixed while its own list scrolls independently.
+private struct SettingsPages<Content: View>: View {
+    let tabs: [String]
+    @Binding var selection: Int
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(spacing: 16) {
+            ScrollView(.horizontal) {
+                HStack(spacing: 10) {
+                    ForEach(tabs.indices, id: \.self) { index in
+                        Button(tabs[index]) { selection = index }
+                            .buttonStyle(HarborNavigationTabStyle(selected: selection == index, compact: true))
+                            .accessibilityIdentifier("settings.page.\(index)")
+                    }
+                }
+                .padding(.horizontal, 60).padding(.vertical, 8)
+            }
+            .scrollIndicators(.hidden)
+            .focusSection()
+            List { content() }
+                .id(selection)
+                .scrollContentBackground(.hidden)
+                .focusSection()
+        }
+        .background(HarborStageBackground())
+    }
 }
 
 private struct SettingsHint: View {
@@ -272,38 +361,46 @@ private struct LibraryPanel: View {
     @AppStorage(SubtitleStyle.Key.hideSpoilers) private var hideSpoilers = false
     @AppStorage(SubtitleStyle.Key.spoilerThumbnails) private var spoilerThumbnails = true
 
+    @State private var page = 0
+
     var body: some View {
-        List {
-            Section("Home layout") {
-                Toggle("Show every add-on catalog", isOn: $showAllRows)
-                Toggle("Hide watched titles in catalogs", isOn: $hideWatched)
-                Toggle("Hide unreleased titles", isOn: $hideUnreleased)
-            }
-            Section("Library") {
-                Toggle("Only show bookmarked titles", isOn: $bookmarkedOnly)
-                Picker("Sort", selection: $librarySort) {
-                    Text("Recently updated").tag("recent")
-                    Text("Title").tag("title")
-                    Text("Year").tag("year")
+        SettingsPages(tabs: ["Home", "Library", "Episodes", "Spoilers"], selection: $page) {
+            switch page {
+            case 0:
+                Section("Home layout") {
+                    Toggle("Show every add-on catalog", isOn: $showAllRows)
+                    Toggle("Hide watched titles in catalogs", isOn: $hideWatched)
+                    Toggle("Hide unreleased titles", isOn: $hideUnreleased)
                 }
-            }
-            Section("Episodes") {
-                Picker("Layout", selection: $episodeLayout) {
-                    Text("List").tag("list")
-                    Text("Strip").tag("strip")
+            case 1:
+                Section("Library") {
+                    Toggle("Only show bookmarked titles", isOn: $bookmarkedOnly)
+                    Picker("Sort", selection: $librarySort) {
+                        Text("Recently updated").tag("recent")
+                        Text("Title").tag("title")
+                        Text("Year").tag("year")
+                    }
                 }
-                Picker("Episode order", selection: $episodeSort) {
-                    Text("Aired order").tag("aired")
-                    Text("Absolute order").tag("absolute")
-                    Text("Newest first").tag("newest")
+            case 2:
+                Section("Episodes") {
+                    Picker("Layout", selection: $episodeLayout) {
+                        Text("List").tag("list")
+                        Text("Strip").tag("strip")
+                    }
+                    Picker("Episode order", selection: $episodeSort) {
+                        Text("Aired order").tag("aired")
+                        Text("Absolute order").tag("absolute")
+                        Text("Newest first").tag("newest")
+                    }
+                    SettingsHint("Absolute order combines every regular season into one continuous release sequence.")
+                    Toggle("Show episode descriptions", isOn: $showEpisodeDesc)
                 }
-                SettingsHint("Absolute order combines every regular season into one continuous release sequence.")
-                Toggle("Show episode descriptions", isOn: $showEpisodeDesc)
-            }
-            Section("Spoilers") {
-                Toggle("Hide spoilers", isOn: $hideSpoilers)
-                if hideSpoilers {
-                    Toggle("Blur episode thumbnails", isOn: $spoilerThumbnails)
+            default:
+                Section("Spoilers") {
+                    Toggle("Hide spoilers", isOn: $hideSpoilers)
+                    if hideSpoilers {
+                        Toggle("Blur episode thumbnails", isOn: $spoilerThumbnails)
+                    }
                 }
             }
         }
@@ -322,38 +419,45 @@ private struct StreamingSourcesPanel: View {
     @AppStorage(SubtitleStyle.Key.pickerShowFilename) private var showFilename = false
     @AppStorage(SubtitleStyle.Key.bandwidthMbps) private var bandwidth = 0.0
 
+    @State private var page = 0
+
     var body: some View {
-        List {
-            Section("Play button behavior") {
-                Picker("When Play is pressed", selection: $instantPlay) {
-                    Text("Start the best stream").tag(true)
-                    Text("Show source picker").tag(false)
+        SettingsPages(tabs: ["Playback", "Source picker", "Add-ons"], selection: $page) {
+            switch page {
+            case 0:
+                Section("Play button behavior") {
+                    Picker("When Play is pressed", selection: $instantPlay) {
+                        Text("Start the best stream").tag(true)
+                        Text("Show source picker").tag(false)
+                    }
+                    Toggle("Remember the last source", isOn: $rememberStream)
                 }
-                Toggle("Remember the last source", isOn: $rememberStream)
-            }
-            Section("Source picker") {
-                Picker("Result order", selection: $streamSort) {
-                    Text("Harbor ranking").tag("harbor")
-                    Text("Add-on order").tag("addon")
+            case 1:
+                Section("Source picker") {
+                    Picker("Result order", selection: $streamSort) {
+                        Text("Harbor ranking").tag("harbor")
+                        Text("Add-on order").tag("addon")
+                    }
+                    Toggle("Show full stream descriptions", isOn: $fullDescription)
+                    Toggle("Show filenames", isOn: $showFilename)
                 }
-                Toggle("Show full stream descriptions", isOn: $fullDescription)
-                Toggle("Show filenames", isOn: $showFilename)
-            }
-            Section("Internet speed") {
-                Picker("Bandwidth limit", selection: $bandwidth) {
-                    Text("Automatic").tag(0.0)
-                    Text("25 Mbps").tag(25.0)
-                    Text("50 Mbps").tag(50.0)
-                    Text("100 Mbps").tag(100.0)
-                    Text("250 Mbps").tag(250.0)
-                    Text("1 Gbps").tag(1000.0)
+                Section("Internet speed") {
+                    Picker("Bandwidth limit", selection: $bandwidth) {
+                        Text("Automatic").tag(0.0)
+                        Text("25 Mbps").tag(25.0)
+                        Text("50 Mbps").tag(50.0)
+                        Text("100 Mbps").tag(100.0)
+                        Text("250 Mbps").tag(250.0)
+                        Text("1 Gbps").tag(1000.0)
+                    }
                 }
-            }
-            Section("Installed Stremio add-ons") {
-                LabeledContent("Available", value: "\(auth.addons.count)")
-                LabeledContent("Provide streams", value: "\(auth.addons.filter { $0.hasStream }.count)")
-                NavigationLink("View installed add-ons") { AddonsView() }
-                SettingsHint("Install add-ons by manifest URL on the Add-ons screen. Configure debrid services in the add-on first; Harbor then uses the synced configuration directly.")
+            default:
+                Section("Installed Stremio add-ons") {
+                    LabeledContent("Available", value: "\(auth.addons.count)")
+                    LabeledContent("Provide streams", value: "\(auth.addons.filter { $0.hasStream }.count)")
+                    NavigationLink("View installed add-ons") { AddonsView() }
+                    SettingsHint("Install add-ons by manifest URL on the Add-ons screen. Configure debrid services in the add-on first; Harbor then uses the synced configuration directly.")
+                }
             }
         }
         .navigationTitle("Streaming sources")
@@ -438,74 +542,85 @@ private struct PlayerPanel: View {
     @AppStorage(SubtitleStyle.Key.skipButtonHideSec) private var skipButtonHideSec = 10
     @AppStorage(SubtitleStyle.Key.nextEpisodeLeadSec) private var nextEpisodeLeadSec = -1
 
+    @State private var page: Int
+
+    init(page: Int = 0) { _page = State(initialValue: page) }
+
     var body: some View {
-        List {
-            Section("Player engine") {
-                Picker("Preferred engine", selection: $playerEngine) {
-                    Text("Auto · VLC, MPV when required").tag("auto")
-                    Text("MPV · best features").tag("mpv")
-                    Text("VLC · fast default").tag("vlc")
-                    Text("KSPlayer · native AVFoundation").tag("ksplayer")
+        SettingsPages(tabs: ["Engine & picture", "Playback", "Audio", "Intro skip", "Next episode"], selection: $page) {
+            switch page {
+            case 0:
+                Section("Player engine") {
+                    Picker("Preferred engine", selection: $playerEngine) {
+                        Text("Auto · VLC, MPV when required").tag("auto")
+                        Text("MPV · best features").tag("mpv")
+                        Text("VLC · fast default").tag("vlc")
+                        Text("KSPlayer · native AVFoundation").tag("ksplayer")
+                    }
+                    LabeledContent("Active on next video", value: engineLabel)
+                    LabeledContent("Hardware video decode", value: hwdec == "off" ? "Software" : "VideoToolbox")
+                    SettingsHint(engineHint)
+                    SettingsHint("You can switch MPV, VLC and KSPlayer from the controls while a video is already playing. Harbor preserves the current position.")
                 }
-                LabeledContent("Active on next video", value: engineLabel)
-                LabeledContent("Hardware video decode", value: hwdec == "off" ? "Software" : "VideoToolbox")
-                SettingsHint(engineHint)
-                SettingsHint("You can switch MPV, VLC and KSPlayer from the controls while a video is already playing. Harbor preserves the current position.")
-            }
-            Section("Aspect ratio") {
-                Picker("Video size", selection: $videoSize) {
-                    ForEach(HarborSettings.videoSizes) { Text($0.label).tag($0.id) }
-                }
-            }
-            Section("Playback") {
-                Toggle("Resume playback", isOn: $resume)
-                Toggle("Confirm before leaving playback", isOn: $confirmLeave)
-                Picker("Default speed", selection: $defaultSpeed) {
-                    ForEach(SubtitleStyle.speeds, id: \.self) { speed in
-                        Text(speed == 1.0 ? "Normal" : String(format: "%gx", speed)).tag(speed)
+                Section("Aspect ratio") {
+                    Picker("Video size", selection: $videoSize) {
+                        ForEach(HarborSettings.videoSizes) { Text($0.label).tag($0.id) }
                     }
                 }
-                Picker("Skip backward", selection: $seekBack) {
-                    ForEach(SubtitleStyle.seekSteps, id: \.self) { Text("\($0) seconds").tag($0) }
+            case 1:
+                Section("Playback") {
+                    Toggle("Resume playback", isOn: $resume)
+                    Toggle("Confirm before leaving playback", isOn: $confirmLeave)
+                    Picker("Default speed", selection: $defaultSpeed) {
+                        ForEach(SubtitleStyle.speeds, id: \.self) { speed in
+                            Text(speed == 1.0 ? "Normal" : String(format: "%gx", speed)).tag(speed)
+                        }
+                    }
+                    Picker("Skip backward", selection: $seekBack) {
+                        ForEach(SubtitleStyle.seekSteps, id: \.self) { Text("\($0) seconds").tag($0) }
+                    }
+                    Picker("Skip forward", selection: $seekForward) {
+                        ForEach(SubtitleStyle.seekSteps, id: \.self) { Text("\($0) seconds").tag($0) }
+                    }
                 }
-                Picker("Skip forward", selection: $seekForward) {
-                    ForEach(SubtitleStyle.seekSteps, id: \.self) { Text("\($0) seconds").tag($0) }
+            case 2:
+                Section("Audio") {
+                    Toggle("Normalize loudness", isOn: $audioNormalize)
+                    Picker("Audio profile", selection: $audioProfile) {
+                        ForEach(HarborSettings.audioProfiles) { Text($0.label).tag($0.id) }
+                    }
+                    SettingsHint("Audio filters apply when the next video starts.")
                 }
-            }
-            Section("Audio") {
-                Toggle("Normalize loudness", isOn: $audioNormalize)
-                Picker("Audio profile", selection: $audioProfile) {
-                    ForEach(HarborSettings.audioProfiles) { Text($0.label).tag($0.id) }
+            case 3:
+                Section("Skip intros & credits") {
+                    Toggle("Show the Skip button", isOn: $showSkipButton)
+                    Toggle("Auto-skip intros", isOn: $autoSkipIntro)
+                    Toggle("Auto-skip recaps", isOn: $autoSkipRecap)
+                    Toggle("Auto-skip credit outros", isOn: $autoSkipOutro)
+                    if showSkipButton {
+                        Picker("Auto-hide Skip button", selection: $skipButtonHideSec) {
+                            Text("Off").tag(0)
+                            Text("5 seconds").tag(5)
+                            Text("10 seconds").tag(10)
+                            Text("15 seconds").tag(15)
+                            Text("30 seconds").tag(30)
+                        }
+                    }
+                    SettingsHint("Harbor combines AniSkip, TheIntroDB and named chapters in the video. Auto-skip runs once per segment; seeking back lets it play normally.")
                 }
-                SettingsHint("Audio filters apply when the next video starts.")
-            }
-            Section("Skip intros & credits") {
-                Toggle("Show the Skip button", isOn: $showSkipButton)
-                Toggle("Auto-skip intros", isOn: $autoSkipIntro)
-                Toggle("Auto-skip recaps", isOn: $autoSkipRecap)
-                Toggle("Auto-skip credit outros", isOn: $autoSkipOutro)
-                if showSkipButton {
-                    Picker("Auto-hide Skip button", selection: $skipButtonHideSec) {
+            default:
+                Section("Next episode prompt") {
+                    Picker("Show Up Next", selection: $nextEpisodeLeadSec) {
+                        Text("Automatic").tag(-1)
                         Text("Off").tag(0)
-                        Text("5 seconds").tag(5)
-                        Text("10 seconds").tag(10)
-                        Text("15 seconds").tag(15)
-                        Text("30 seconds").tag(30)
+                        Text("30 seconds before end").tag(30)
+                        Text("45 seconds before end").tag(45)
+                        Text("1 minute before end").tag(60)
+                        Text("1.5 minutes before end").tag(90)
+                        Text("2 minutes before end").tag(120)
                     }
+                    Toggle("Auto-play next episode", isOn: $autoPlayNext)
                 }
-                SettingsHint("Harbor combines AniSkip, TheIntroDB and named chapters in the video. Auto-skip runs once per segment; seeking back lets it play normally.")
-            }
-            Section("Next episode prompt") {
-                Picker("Show Up Next", selection: $nextEpisodeLeadSec) {
-                    Text("Automatic").tag(-1)
-                    Text("Off").tag(0)
-                    Text("30 seconds before end").tag(30)
-                    Text("45 seconds before end").tag(45)
-                    Text("1 minute before end").tag(60)
-                    Text("1.5 minutes before end").tag(90)
-                    Text("2 minutes before end").tag(120)
-                }
-                Toggle("Auto-play next episode", isOn: $autoPlayNext)
             }
         }
         .navigationTitle("Player & quality")
@@ -546,37 +661,45 @@ private struct VideoTuningPanel: View {
     @AppStorage(SubtitleStyle.Key.toneMapping) private var toneMapping = "auto"
     @AppStorage(SubtitleStyle.Key.motionInterpolation) private var motionInterpolation = false
 
+    @State private var page = 0
+
     var body: some View {
-        List {
-            Section("Picture quality") {
-                Picker("Preset", selection: $quality) {
-                    ForEach(HarborSettings.qualityPresets) { Text($0.label).tag($0.id) }
+        SettingsPages(tabs: ["Quality", "Picture", "HDR & motion", "Connection & audio"], selection: $page) {
+            switch page {
+            case 0:
+                Section("Picture quality") {
+                    Picker("Preset", selection: $quality) {
+                        ForEach(HarborSettings.qualityPresets) { Text($0.label).tag($0.id) }
+                    }
+                    Picker("Hardware acceleration", selection: $hwdec) {
+                        ForEach(HarborSettings.hwdecModes) { Text($0.label).tag($0.id) }
+                    }
                 }
-                Picker("Hardware acceleration", selection: $hwdec) {
-                    ForEach(HarborSettings.hwdecModes) { Text($0.label).tag($0.id) }
+            case 1:
+                Section("Picture adjustments") {
+                    valuePicker("Brightness", value: $brightness)
+                    valuePicker("Contrast", value: $contrast)
+                    valuePicker("Saturation", value: $saturation)
+                    valuePicker("Gamma", value: $gamma)
+                    Button("Reset picture adjustments") {
+                        brightness = 0; contrast = 0; saturation = 0; gamma = 0
+                    }
                 }
-            }
-            Section("Picture adjustments") {
-                valuePicker("Brightness", value: $brightness)
-                valuePicker("Contrast", value: $contrast)
-                valuePicker("Saturation", value: $saturation)
-                valuePicker("Gamma", value: $gamma)
-                Button("Reset picture adjustments") {
-                    brightness = 0; contrast = 0; saturation = 0; gamma = 0
+            case 2:
+                Section("Color & HDR") {
+                    Picker("Tone mapping", selection: $toneMapping) {
+                        ForEach(HarborSettings.toneMapModes) { Text($0.label).tag($0.id) }
+                    }
                 }
-            }
-            Section("Color & HDR") {
-                Picker("Tone mapping", selection: $toneMapping) {
-                    ForEach(HarborSettings.toneMapModes) { Text($0.label).tag($0.id) }
+                Section("Motion") {
+                    Toggle("Smooth motion", isOn: $motionInterpolation)
+                    SettingsHint("Uses display-resample interpolation in mpv. It is not SVP frame generation and can increase GPU usage.")
                 }
-            }
-            Section("Motion") {
-                Toggle("Smooth motion", isOn: $motionInterpolation)
-                SettingsHint("Uses display-resample interpolation in mpv. It is not SVP frame generation and can increase GPU usage.")
-            }
-            Section("Connection & audio") {
-                Toggle("Bigger buffer for unstable Wi-Fi", isOn: $bufferBoost)
-                Toggle("Downmix surround to stereo", isOn: $downmix)
+            default:
+                Section("Connection & audio") {
+                    Toggle("Bigger buffer for unstable Wi-Fi", isOn: $bufferBoost)
+                    Toggle("Downmix surround to stereo", isOn: $downmix)
+                }
             }
         }
         .navigationTitle("Video tuning")
@@ -603,33 +726,39 @@ private struct AnimePanel: View {
         return Set(nested + root).count
     }
 
+    @State private var page = 0
+
     var body: some View {
-        List {
-            Section("Anime4K upscaling") {
-                Toggle("Enable Anime4K", isOn: $enabled)
-                    .disabled(shaderCount < 17)
-                LabeledContent("Automatic activation", value: "Anime only")
-                Toggle("Show Anime4K indicator", isOn: $indicator)
-                    .disabled(!enabled)
-                LabeledContent("Bundled shaders", value: shaderCount >= 17 ? "17 ready" : "\(shaderCount)/17")
-                if shaderCount < 17 {
-                    SettingsHint("This build does not contain the Anime4K shader pack. The release workflow bundles it automatically.")
+        SettingsPages(tabs: ["Activation", "Presets"], selection: $page) {
+            switch page {
+            case 0:
+                Section("Anime4K upscaling") {
+                    Toggle("Enable Anime4K", isOn: $enabled)
+                        .disabled(shaderCount < 17)
+                    LabeledContent("Automatic activation", value: "Anime only")
+                    Toggle("Show Anime4K indicator", isOn: $indicator)
+                        .disabled(!enabled)
+                    LabeledContent("Bundled shaders", value: shaderCount >= 17 ? "17 ready" : "\(shaderCount)/17")
+                    if shaderCount < 17 {
+                        SettingsHint("This build does not contain the Anime4K shader pack. The release workflow bundles it automatically.")
+                    }
                 }
-            }
-            Section("Anime4K presets") {
-                Picker("Mode", selection: $mode) {
-                    ForEach(HarborSettings.animeModes) { Text($0.label).tag($0.id) }
+            default:
+                Section("Anime4K presets") {
+                    Picker("Mode", selection: $mode) {
+                        ForEach(HarborSettings.animeModes) { Text($0.label).tag($0.id) }
+                    }
+                    Picker("GPU tier", selection: $tier) {
+                        ForEach(HarborSettings.animeTiers) { Text($0.label).tag($0.id) }
+                    }
+                    if let choice = HarborSettings.animeTiers.first(where: { $0.id == tier }) {
+                        SettingsHint(choice.detail)
+                    }
+                    if tier == "fast" {
+                        SettingsHint("Maximum performance uses the guarded DTD scaler. It avoids CNN passes and skips expensive work when meaningful upscaling is not required.")
+                    }
+                    SettingsHint("Anime4K is never attached to movies or regular series. Anime playback automatically switches to MPV, and native 4K anime skips the shader graph to avoid GPU-memory crashes.")
                 }
-                Picker("GPU tier", selection: $tier) {
-                    ForEach(HarborSettings.animeTiers) { Text($0.label).tag($0.id) }
-                }
-                if let choice = HarborSettings.animeTiers.first(where: { $0.id == tier }) {
-                    SettingsHint(choice.detail)
-                }
-                if tier == "fast" {
-                    SettingsHint("Maximum performance uses the guarded DTD scaler. It avoids CNN passes and skips expensive work when meaningful upscaling is not required.")
-                }
-                SettingsHint("Anime4K is never attached to movies or regular series. Anime playback automatically switches to MPV, and native 4K anime skips the shader graph to avoid GPU-memory crashes.")
             }
         }
         .navigationTitle("Anime tweaks")
@@ -649,38 +778,45 @@ private struct PlayerLayoutPanel: View {
     @AppStorage(SubtitleStyle.Key.showAspectButton) private var showAspect = true
     @AppStorage(SubtitleStyle.Key.showAnimeButton) private var showAnime = true
 
+    @State private var page = 0
+
     var body: some View {
-        List {
-            Section("Controls") {
-                Picker("Hide controls after", selection: $hideSeconds) {
-                    Text("3 seconds").tag(3)
-                    Text("5 seconds").tag(5)
-                    Text("8 seconds").tag(8)
-                    Text("Never").tag(0)
+        SettingsPages(tabs: ["Controls", "Transport", "Tools"], selection: $page) {
+            switch page {
+            case 0:
+                Section("Controls") {
+                    Picker("Hide controls after", selection: $hideSeconds) {
+                        Text("3 seconds").tag(3)
+                        Text("5 seconds").tag(5)
+                        Text("8 seconds").tag(8)
+                        Text("Never").tag(0)
+                    }
+                    Toggle("Show codec and quality info", isOn: $showQuality)
                 }
-                Toggle("Show codec and quality info", isOn: $showQuality)
-            }
-            Section("Title text") {
-                Picker("Player title size", selection: $titleScale) {
-                    Text("Small").tag(0.85)
-                    Text("Default").tag(1.0)
-                    Text("Large").tag(1.2)
+                Section("Title text") {
+                    Picker("Player title size", selection: $titleScale) {
+                        Text("Small").tag(0.85)
+                        Text("Default").tag(1.0)
+                        Text("Large").tag(1.2)
+                    }
                 }
-            }
-            Section("Transport buttons") {
-                Toggle("Stop", isOn: $showStop)
-                Toggle("Skip backward / forward", isOn: $showSeek)
-                Toggle("Next episode", isOn: $showNext)
-            }
-            Section("Utility buttons") {
-                Toggle("Playback speed", isOn: $showSpeed)
-                Toggle("Subtitles", isOn: $showSubtitles)
-                Toggle("Audio tracks", isOn: $showAudio)
-                Toggle("Aspect ratio", isOn: $showAspect)
-                Toggle("Anime4K", isOn: $showAnime)
-            }
-            Section {
-                SettingsHint("The Apple TV layout follows Harbor desktop: transport controls on the left, speed/subtitle/audio and picture tools on the right, with the timeline below. Siri Remote navigation replaces desktop hotkeys.")
+            case 1:
+                Section("Transport buttons") {
+                    Toggle("Stop", isOn: $showStop)
+                    Toggle("Skip backward / forward", isOn: $showSeek)
+                    Toggle("Next episode", isOn: $showNext)
+                }
+            default:
+                Section("Utility buttons") {
+                    Toggle("Playback speed", isOn: $showSpeed)
+                    Toggle("Subtitles", isOn: $showSubtitles)
+                    Toggle("Audio tracks", isOn: $showAudio)
+                    Toggle("Aspect ratio", isOn: $showAspect)
+                    Toggle("Anime4K", isOn: $showAnime)
+                }
+                Section {
+                    SettingsHint("The Apple TV layout follows Harbor desktop: transport controls on the left, speed/subtitle/audio and picture tools on the right, with the timeline below. Siri Remote navigation replaces desktop hotkeys.")
+                }
             }
         }
         .navigationTitle("Player layout")
@@ -711,140 +847,157 @@ private struct LanguagesPanel: View {
     @AppStorage(SubtitleStyle.Key.assOverride) private var assOverride = "no"
     @AppStorage(SubtitleStyle.Key.lineSpacing) private var lineSpacing = 0.0
 
+    @State private var page: Int
+
+    init(page: Int = 0) { _page = State(initialValue: page) }
+
     var body: some View {
-        List {
-            Section("Playback languages") {
-                NavigationLink {
-                    LanguageSelectionPanel(
-                        title: "Audio language",
-                        explanation: "Harbor selects this spoken language when a matching audio track is available.",
-                        selection: $audioLang)
-                } label: {
-                    LanguagePreferenceRow(
-                        icon: "waveform",
-                        title: "Audio language",
-                        detail: "Preferred spoken track",
-                        selected: languageLabel(audioLang))
+        SettingsPages(tabs: ["Languages", "Behaviour", "Style", "Font & size", "Position", "Colours", "Reset"], selection: $page) {
+            switch page {
+            case 0:
+                Section("Playback languages") {
+                    NavigationLink {
+                        LanguageSelectionPanel(
+                            title: "Audio language",
+                            explanation: "Harbor selects this spoken language when a matching audio track is available.",
+                            selection: $audioLang)
+                    } label: {
+                        LanguagePreferenceRow(
+                            icon: "waveform",
+                            title: "Audio language",
+                            detail: "Preferred spoken track",
+                            selected: languageLabel(audioLang))
+                    }
+                    NavigationLink {
+                        LanguageSelectionPanel(
+                            title: "Primary subtitles",
+                            explanation: "This is the first subtitle language Harbor tries for every stream.",
+                            selection: $subLang)
+                    } label: {
+                        LanguagePreferenceRow(
+                            icon: "captions.bubble",
+                            title: "Primary subtitles",
+                            detail: "First subtitle choice",
+                            selected: languageLabel(subLang))
+                    }
+                    NavigationLink {
+                        LanguageSelectionPanel(
+                            title: "Fallback subtitles",
+                            explanation: "Harbor tries this language when no primary-language subtitle is available.",
+                            selection: $secondarySubLang)
+                    } label: {
+                        LanguagePreferenceRow(
+                            icon: "captions.bubble.fill",
+                            title: "Fallback subtitles",
+                            detail: "Used if the first choice is unavailable",
+                            selected: languageLabel(secondarySubLang))
+                    }
+                    SettingsHint("Open a row to choose one language. “System / Auto” follows the stream and Apple TV language instead of forcing a specific track.")
                 }
-                NavigationLink {
-                    LanguageSelectionPanel(
-                        title: "Primary subtitles",
-                        explanation: "This is the first subtitle language Harbor tries for every stream.",
-                        selection: $subLang)
-                } label: {
-                    LanguagePreferenceRow(
-                        icon: "captions.bubble",
-                        title: "Primary subtitles",
-                        detail: "First subtitle choice",
-                        selected: languageLabel(subLang))
+            case 1:
+                Section("Subtitle behavior") {
+                    Toggle("Subtitles off by default", isOn: $subsOff)
+                    Toggle("Prefer embedded subtitles", isOn: $preferEmbedded)
+                    Toggle("Prefer forced / signs tracks", isOn: $preferForced)
                 }
-                NavigationLink {
-                    LanguageSelectionPanel(
-                        title: "Fallback subtitles",
-                        explanation: "Harbor tries this language when no primary-language subtitle is available.",
-                        selection: $secondarySubLang)
-                } label: {
-                    LanguagePreferenceRow(
-                        icon: "captions.bubble.fill",
-                        title: "Fallback subtitles",
-                        detail: "Used if the first choice is unavailable",
-                        selected: languageLabel(secondarySubLang))
+            case 2:
+                Section("Subtitle style") {
+                    Picker("Background", selection: $subStyle) {
+                        ForEach(SubtitleStyle.styles) { Text($0.label).tag($0.id) }
+                    }
+                    Picker("Styled (ASS) subtitles", selection: $assOverride) {
+                        ForEach(SubtitleStyle.assOverrides) { Text($0.label).tag($0.id) }
+                    }
+                    if assOverride == "force" {
+                        SettingsHint("Use my style strips ASS/SSA script styling and forces Harbor's font, size, colors, outline and position. Playback automatically uses MPV so the override cannot be bypassed.")
+                    }
+                    if subStyle == "box" {
+                        Picker("Background opacity", selection: $boxOpacity) {
+                            ForEach(SubtitleStyle.opacities, id: \.self) { value in
+                                Text("\(Int(value * 100))%").tag(value)
+                            }
+                        }
+                    }
+                    if subStyle == "outline" {
+                        Picker("Outline thickness", selection: $borderSize) {
+                            ForEach(SubtitleStyle.outlineSizes.dropFirst(), id: \.self) { value in
+                                Text(String(format: "%.0f px", value)).tag(value)
+                            }
+                        }
+                    }
                 }
-                SettingsHint("Open a row to choose one language. “System / Auto” follows the stream and Apple TV language instead of forcing a specific track.")
-            }
-            Section("Subtitle behavior") {
-                Toggle("Subtitles off by default", isOn: $subsOff)
-                Toggle("Prefer embedded subtitles", isOn: $preferEmbedded)
-                Toggle("Prefer forced / signs tracks", isOn: $preferForced)
-            }
-            Section("Live preview") {
-                SubtitlePreviewCard(style: subStyle, fontSize: fontSize, bold: subBold,
-                                    opacity: opacity, boxOpacity: boxOpacity,
-                                    fontColor: fontColor, boxColor: boxColor)
-            }
-            Section("Subtitle style") {
-                Picker("Background", selection: $subStyle) {
-                    ForEach(SubtitleStyle.styles) { Text($0.label).tag($0.id) }
+                Section("Live preview") {
+                    SubtitlePreviewCard(style: subStyle, fontSize: fontSize, bold: subBold,
+                                        opacity: opacity, boxOpacity: boxOpacity,
+                                        fontColor: fontColor, boxColor: boxColor)
                 }
-                Picker("Styled (ASS) subtitles", selection: $assOverride) {
-                    ForEach(SubtitleStyle.assOverrides) { Text($0.label).tag($0.id) }
-                }
-                if assOverride == "force" {
-                    SettingsHint("Use my style strips ASS/SSA script styling and forces Harbor's font, size, colors, outline and position. Playback automatically uses MPV so the override cannot be bypassed.")
-                }
-                if subStyle == "box" {
-                    Picker("Background opacity", selection: $boxOpacity) {
+            case 3:
+                Section("Font & size") {
+                    Picker("Font", selection: $font) {
+                        ForEach(SubtitleStyle.fonts) { Text($0.label).tag($0.id) }
+                    }
+                    Toggle("Bold text", isOn: $subBold)
+                    Picker("Size", selection: $fontSize) {
+                        ForEach(SubtitleStyle.fontSizes, id: \.self) { value in
+                            Text(String(format: "%.0f px", value)).tag(value)
+                        }
+                    }
+                    Picker("Opacity", selection: $opacity) {
                         ForEach(SubtitleStyle.opacities, id: \.self) { value in
                             Text("\(Int(value * 100))%").tag(value)
                         }
                     }
                 }
-                if subStyle == "outline" {
-                    Picker("Outline thickness", selection: $borderSize) {
-                        ForEach(SubtitleStyle.outlineSizes.dropFirst(), id: \.self) { value in
-                            Text(String(format: "%.0f px", value)).tag(value)
+            case 4:
+                Section("Subtitle position") {
+                    Picker("Distance from bottom", selection: $margin) {
+                        ForEach(SubtitleStyle.margins, id: \.self) { value in
+                            Text(String(format: "%.0f%%", value)).tag(value)
+                        }
+                    }
+                    Picker("Alignment", selection: $alignment) {
+                        Text("Left").tag("left")
+                        Text("Center").tag("center")
+                        Text("Right").tag("right")
+                    }
+                    Picker("Line spacing", selection: $lineSpacing) {
+                        ForEach(SubtitleStyle.lineSpacings, id: \.self) { value in
+                            Text(String(format: "%+.0f px", value)).tag(value)
                         }
                     }
                 }
-                Picker("Font", selection: $font) {
-                    ForEach(SubtitleStyle.fonts) { Text($0.label).tag($0.id) }
-                }
-                Toggle("Bold text", isOn: $subBold)
-                Picker("Size", selection: $fontSize) {
-                    ForEach(SubtitleStyle.fontSizes, id: \.self) { value in
-                        Text(String(format: "%.0f px", value)).tag(value)
+            case 5:
+                Section("Subtitle colours") {
+                    Picker("Text color", selection: $fontColor) {
+                        ForEach(SubtitleStyle.textColors) { Text($0.label).tag($0.id) }
                     }
-                }
-                Picker("Opacity", selection: $opacity) {
-                    ForEach(SubtitleStyle.opacities, id: \.self) { value in
-                        Text("\(Int(value * 100))%").tag(value)
-                    }
-                }
-                Picker("Distance from bottom", selection: $margin) {
-                    ForEach(SubtitleStyle.margins, id: \.self) { value in
-                        Text(String(format: "%.0f%%", value)).tag(value)
-                    }
-                }
-                Picker("Alignment", selection: $alignment) {
-                    Text("Left").tag("left")
-                    Text("Center").tag("center")
-                    Text("Right").tag("right")
-                }
-                Picker("Line spacing", selection: $lineSpacing) {
-                    ForEach(SubtitleStyle.lineSpacings, id: \.self) { value in
-                        Text(String(format: "%+.0f px", value)).tag(value)
-                    }
-                }
-            }
-            Section("Subtitle colours") {
-                Picker("Text color", selection: $fontColor) {
-                    ForEach(SubtitleStyle.textColors) { Text($0.label).tag($0.id) }
-                }
-                Picker("Outline color", selection: $borderColor) {
-                    ForEach(SubtitleStyle.edgeColors) { Text($0.label).tag($0.id) }
-                }
-                if subStyle == "box" {
-                    Picker("Box color", selection: $boxColor) {
+                    Picker("Outline color", selection: $borderColor) {
                         ForEach(SubtitleStyle.edgeColors) { Text($0.label).tag($0.id) }
                     }
+                    if subStyle == "box" {
+                        Picker("Box color", selection: $boxColor) {
+                            ForEach(SubtitleStyle.edgeColors) { Text($0.label).tag($0.id) }
+                        }
+                    }
                 }
-            }
-            Section {
-                Button("Reset subtitle appearance", role: .destructive) {
-                    subStyle = SubtitleStyle.defaultStyle
-                    assOverride = "no"
-                    boxOpacity = 0.6
-                    borderSize = 2
-                    font = "inter"
-                    subBold = false
-                    fontSize = SubtitleStyle.defaultFontSize
-                    opacity = 1
-                    margin = 12
-                    alignment = "center"
-                    lineSpacing = 0
-                    fontColor = SubtitleStyle.defaultFontColor
-                    borderColor = SubtitleStyle.defaultBorderColor
-                    boxColor = SubtitleStyle.defaultBoxColor
+            default:
+                Section {
+                    Button("Reset subtitle appearance", role: .destructive) {
+                        subStyle = SubtitleStyle.defaultStyle
+                        assOverride = "no"
+                        boxOpacity = 0.6
+                        borderSize = 2
+                        font = "inter"
+                        subBold = false
+                        fontSize = SubtitleStyle.defaultFontSize
+                        opacity = 1
+                        margin = 12
+                        alignment = "center"
+                        lineSpacing = 0
+                        fontColor = SubtitleStyle.defaultFontColor
+                        borderColor = SubtitleStyle.defaultBorderColor
+                        boxColor = SubtitleStyle.defaultBoxColor
+                    }
                 }
             }
         }
@@ -963,7 +1116,7 @@ private struct SubtitlePreviewCard: View {
                         x: style == "shadow" ? 3 : 0, y: style == "shadow" ? 3 : 0)
                 .padding(.bottom, 32)
         }
-        .frame(height: 260)
+        .frame(height: 140)
         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 }
@@ -989,42 +1142,49 @@ private struct ThemePanel: View {
     @AppStorage(SubtitleStyle.Key.reduceArtworkMotion) private var reduceMotion = false
     @AppStorage(SubtitleStyle.Key.interfaceStyle) private var interfaceStyle = "harbor"
 
+    @State private var page = 0
+
     var body: some View {
-        List {
-            Section("Theme") {
-                Picker("Interface style", selection: $interfaceStyle) {
-                    Text("Harbor").tag("harbor")
-                    Text("Midnight · Orivio Max").tag("max")
-                    Text("Cinema · Orivio Netflix").tag("netflix")
+        SettingsPages(tabs: ["Theme", "Posters", "Accessibility"], selection: $page) {
+            switch page {
+            case 0:
+                Section("Theme") {
+                    Picker("Interface style", selection: $interfaceStyle) {
+                        Text("Harbor").tag("harbor")
+                        Text("Midnight · Orivio Max").tag("max")
+                        Text("Cinema · Orivio Netflix").tag("netflix")
+                    }
+                    Picker("Accent", selection: $accent) {
+                        ForEach(HarborSettings.accents) { Text($0.label).tag($0.id) }
+                    }
+                    Picker("Background", selection: $background) {
+                        Text("Harbor").tag("harbor")
+                        Text("OLED black").tag("oled")
+                        Text("System dark").tag("system")
+                    }
                 }
-                Picker("Accent", selection: $accent) {
-                    ForEach(HarborSettings.accents) { Text($0.label).tag($0.id) }
+            case 1:
+                Section("Posters") {
+                    Picker("Poster size", selection: $posterScale) {
+                        Text("Compact").tag(0.85)
+                        Text("Default").tag(1.0)
+                        Text("Large").tag(1.15)
+                    }
+                    Picker("Corner radius", selection: $posterRadius) {
+                        Text("Square").tag(0.0)
+                        Text("Soft").tag(12.0)
+                        Text("Round").tag(24.0)
+                    }
+                    Picker("Row title size", selection: $rowTitleScale) {
+                        Text("Small").tag(0.85)
+                        Text("Default").tag(1.0)
+                        Text("Large").tag(1.2)
+                    }
                 }
-                Picker("Background", selection: $background) {
-                    Text("Harbor").tag("harbor")
-                    Text("OLED black").tag("oled")
-                    Text("System dark").tag("system")
+            default:
+                Section("Accessibility") {
+                    Toggle("Reduce artwork motion", isOn: $reduceMotion)
                 }
-            }
-            Section("Posters") {
-                Picker("Poster size", selection: $posterScale) {
-                    Text("Compact").tag(0.85)
-                    Text("Default").tag(1.0)
-                    Text("Large").tag(1.15)
-                }
-                Picker("Corner radius", selection: $posterRadius) {
-                    Text("Square").tag(0.0)
-                    Text("Soft").tag(12.0)
-                    Text("Round").tag(24.0)
-                }
-                Picker("Row title size", selection: $rowTitleScale) {
-                    Text("Small").tag(0.85)
-                    Text("Default").tag(1.0)
-                    Text("Large").tag(1.2)
-                }
-            }
-            Section("Accessibility") {
-                Toggle("Reduce artwork motion", isOn: $reduceMotion)
             }
         }
         .navigationTitle("Theme & appearance")

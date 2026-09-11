@@ -7,44 +7,67 @@ import SwiftUI
 struct PosterCard: View {
     let item: MetaItem
     var width: CGFloat = 240
+    var onRemoveFromHistory: (() -> Void)? = nil
+    @AppStorage(SubtitleStyle.Key.posterScale) private var posterScale = 1.0
+    @AppStorage(SubtitleStyle.Key.posterRadius) private var posterRadius = 12.0
+    @AppStorage(SubtitleStyle.Key.reduceArtworkMotion) private var reduceArtworkMotion = false
+    @AppStorage(SubtitleStyle.Key.interfaceStyle) private var interfaceStyle = "harbor"
+    @AppStorage(SubtitleStyle.Key.accent) private var accentID = "green"
+
+    private var cardWidth: CGFloat { width * posterScale }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             NavigationLink(value: item) {
                 ZStack(alignment: .bottomLeading) {
-                    AsyncImage(url: URL(string: item.poster ?? "")) { phase in
-                        switch phase {
-                        case .success(let img):
-                            img.resizable().aspectRatio(contentMode: .fill)
-                        case .empty:
-                            ZStack { Color.white.opacity(0.06); ProgressView() }
-                        default:
-                            ZStack {
-                                Color.white.opacity(0.06)
-                                Text(item.name)
-                                    .font(.caption)
-                                    .foregroundStyle(.white.opacity(0.6))
-                                    .multilineTextAlignment(.center)
-                                    .padding(8)
-                            }
-                        }
-                    }
-                    .frame(width: width, height: width * 3 / 2)
+                    HarborArtworkImage(url: item.poster, maxPixelSize: 640,
+                                       fallbackText: item.name, showProgress: true)
+                    .frame(width: cardWidth, height: cardWidth * 3 / 2)
+                    .clipShape(RoundedRectangle(cornerRadius: posterRadius, style: .continuous))
 
                     if let rating = item.imdbRating, !rating.isEmpty {
                         ImdbBadge(rating: rating)
                             .padding(10)
                     }
                 }
-                .frame(width: width, height: width * 3 / 2)
+                .frame(width: cardWidth, height: cardWidth * 3 / 2)
+                .clipShape(RoundedRectangle(cornerRadius: posterRadius, style: .continuous))
             }
-            .buttonStyle(.card)
+            .buttonStyle(HarborCardFocusStyle(
+                radius: posterRadius, accent: focusColor,
+                scale: 1.065, reduceMotion: reduceArtworkMotion))
+            .contextMenu {
+                if let onRemoveFromHistory {
+                    Button(role: .destructive, action: onRemoveFromHistory) {
+                        Label("Remove from Watch History", systemImage: "trash")
+                    }
+                }
+            }
+            .transaction { transaction in
+                if reduceArtworkMotion { transaction.animation = nil }
+            }
 
             Text(item.name)
-                .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(.white.opacity(0.9))
+                .font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.94))
                 .lineLimit(1)
-                .frame(width: width, alignment: .leading)
+                .frame(width: cardWidth, alignment: .leading)
+            HStack(spacing: 7) {
+                if let year = item.releaseInfo, !year.isEmpty { Text(year) }
+                Text(item.type == "movie" ? "Movie" : (item.type == "anime" ? "Anime" : "Series"))
+            }
+            .font(.system(size: 15, weight: .medium))
+            .foregroundStyle(HarborTVDesign.tertiaryText)
+            .lineLimit(1)
+            .frame(width: cardWidth, alignment: .leading)
+        }
+    }
+
+    private var focusColor: Color {
+        switch interfaceStyle {
+        case "max": return .white
+        case "netflix": return Color(red: 0.90, green: 0.035, blue: 0.075)
+        default: return HarborSettings.accentColor(accentID)
         }
     }
 }
@@ -73,29 +96,36 @@ struct ImdbBadge: View {
 /// episode info on a bottom gradient, and a thin progress bar along the bottom edge.
 struct ContinueCard: View {
     let entry: CwItem
+    let focus: FocusState<String?>.Binding
     var width: CGFloat = 400
+    var compact = false
+    var onRemove: (() -> Void)? = nil
+    @AppStorage(SubtitleStyle.Key.accent) private var accent = "green"
+    @AppStorage(SubtitleStyle.Key.posterRadius) private var posterRadius = 12.0
+    @AppStorage(SubtitleStyle.Key.interfaceStyle) private var interfaceStyle = "harbor"
 
-    private var height: CGFloat { width * 9 / 16 }
+    private var height: CGFloat { compact ? width * 3 / 2 : width * 9 / 16 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             NavigationLink(value: entry.meta) {
                 ZStack(alignment: .bottomLeading) {
-                    AsyncImage(url: URL(string: entry.meta.background ?? entry.meta.poster ?? "")) { phase in
-                        switch phase {
-                        case .success(let img):
-                            img.resizable().aspectRatio(contentMode: .fill)
-                        default:
-                            Color.white.opacity(0.06)
-                        }
+                    if compact {
+                        HarborArtworkImage(url: entry.meta.poster, maxPixelSize: 640,
+                                           fallbackText: entry.meta.name)
+                    } else {
+                        HarborPreviewArtwork(item: entry.meta, maxPixelSize: 1200)
                     }
-                    .frame(width: width, height: height)
 
                     LinearGradient(colors: [.clear, .black.opacity(0.75)],
                                    startPoint: .center, endPoint: .bottom)
 
-                    // "▶ S1E5" pill like the Windows CW rail.
-                    HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        if !compact {
+                            Text(entry.meta.name)
+                                .font(.system(size: width > 500 ? 32 : 25, weight: .bold))
+                                .lineLimit(2)
+                        }
                         HStack(spacing: 6) {
                             Image(systemName: "play.fill").font(.system(size: 12, weight: .bold))
                             if let s = entry.season, let e = entry.episode {
@@ -108,7 +138,7 @@ struct ContinueCard: View {
                         .padding(.horizontal, 10).padding(.vertical, 5)
                         .background(Capsule().fill(.black.opacity(0.6)))
                     }
-                    .padding(12)
+                    .padding(22)
                     .padding(.bottom, 6)
 
                     // Progress along the very bottom.
@@ -118,8 +148,8 @@ struct ContinueCard: View {
                             GeometryReader { geo in
                                 ZStack(alignment: .leading) {
                                     Rectangle().fill(.white.opacity(0.25))
-                                    Rectangle().fill(.green)
-                                        .frame(width: geo.size.width * entry.progress)
+                                    Rectangle().fill(focusColor)
+                                        .frame(width: geo.size.width * (entry.progress.isFinite ? min(1, max(0, entry.progress)) : 0))
                                 }
                             }
                             .frame(height: 5)
@@ -128,14 +158,47 @@ struct ContinueCard: View {
                     }
                 }
                 .frame(width: width, height: height)
+                .clipShape(RoundedRectangle(cornerRadius: posterRadius, style: .continuous))
             }
-            .buttonStyle(.card)
+            .buttonStyle(HarborCardFocusStyle(radius: posterRadius,
+                                               accent: focusColor,
+                                               scale: 1.06,
+                                               reduceMotion: false))
+            .focused(focus, equals: entry.id)
+            .contextMenu {
+                if let onRemove {
+                    Button(role: .destructive, action: onRemove) {
+                        Label("Remove from Continue Watching", systemImage: "minus.circle")
+                    }
+                }
+            }
+            .accessibilityIdentifier("continue.title.\(entry.id)")
+            .accessibilityValue(compact ? "Poster" : "Expanded preview")
 
-            Text(entry.meta.name)
-                .font(.system(size: 20, weight: .medium))
+            HStack(spacing: 10) {
+                if compact { Text(entry.meta.name) }
+                else if let season = entry.season, let episode = entry.episode {
+                    Text("Season \(season) · Episode \(episode)")
+                } else { Text(entry.meta.name) }
+                if !compact, let remaining = entry.remainingSeconds, remaining.isFinite,
+                   remaining > 0, remaining < Double(Int.max) * 60 {
+                    Text("·").foregroundStyle(HarborTVDesign.tertiaryText)
+                    Text("\(Int(ceil(remaining / 60))) min left")
+                        .foregroundStyle(HarborTVDesign.secondaryText)
+                }
+            }
+                .font(.system(size: 19, weight: .medium))
                 .foregroundStyle(.white.opacity(0.9))
                 .lineLimit(1)
                 .frame(width: width, alignment: .leading)
+        }
+    }
+
+    private var focusColor: Color {
+        switch interfaceStyle {
+        case "max": return .white
+        case "netflix": return Color(red: 0.90, green: 0.035, blue: 0.075)
+        default: return HarborSettings.accentColor(accent)
         }
     }
 }

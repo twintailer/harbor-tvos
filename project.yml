@@ -77,6 +77,10 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: HarborTV
 schemes:
+  HarborTV:
+    build:
+      targets:
+        HarborTV: all
   HarborTVNavigationTests:
     build:
       targets:

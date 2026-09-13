@@ -55,7 +55,6 @@ struct CatalogGridView: View {
                                 }
                         }
                     }
-                    .accessibilityIdentifier("catalog.grid.titles")
                     if visibleItems.isEmpty {
                         HarborEmptyState(icon: "square.grid.2x2", title: "No visible titles",
                                          message: "Your catalog filters may hide these titles.")

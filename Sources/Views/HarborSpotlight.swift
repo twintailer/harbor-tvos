@@ -18,7 +18,12 @@ struct HarborSpotlight: View {
     private var currentIndex: Int { min(index, max(0, items.count - 1)) }
     private var item: MetaItem { items[currentIndex] }
     private var meta: MetaItem { enriched[item.contentKey] ?? item }
-    private var timerKey: String { items.map(\.contentKey).joined(separator: "|") + "|\(manualRevision)" }
+    private var canAutoRotate: Bool {
+        visible && scenePhase == .active && focused == nil && !reduceMotion && items.count > 1
+    }
+    private var timerKey: String {
+        items.map(\.contentKey).joined(separator: "|") + "|\(manualRevision)|\(canAutoRotate)"
+    }
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
@@ -78,7 +83,7 @@ struct HarborSpotlight: View {
                                 .frame(width: page == currentIndex ? 26 : 10, height: 5)
                                 .frame(width: 30, height: 38)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(SpotlightIndicatorStyle())
                         .focused($focused, equals: .page(page))
                         .overlay(RoundedRectangle(cornerRadius: 8)
                             .stroke(.white.opacity(focused == .page(page) ? 0.9 : 0), lineWidth: 2))
@@ -98,6 +103,7 @@ struct HarborSpotlight: View {
                     .accessibilityIdentifier("spotlight.position")
             }
             .padding(.horizontal, 60).padding(.bottom, 18)
+            .focusSection()
         }
         .frame(height: 540)
         .clipped()
@@ -111,11 +117,13 @@ struct HarborSpotlight: View {
             index = 0; enriched = [:]; logo = nil
         }
         .task(id: timerKey) {
+            // Environment values are captured when a task starts. Restart it on
+            // activation/focus changes instead of retaining an inactive scene.
+            guard canAutoRotate else { return }
             while !Task.isCancelled {
                 do { try await Task.sleep(nanoseconds: 8_000_000_000) } catch { return }
-                if visible, scenePhase == .active, focused == nil, !reduceMotion, items.count > 1 {
-                    index = SpotlightPresentation.advance(index: currentIndex, by: 1, count: items.count)
-                }
+                guard !Task.isCancelled else { return }
+                index = SpotlightPresentation.advance(index: currentIndex, by: 1, count: items.count)
             }
         }
         .task(id: item.contentKey) {
@@ -149,5 +157,12 @@ struct HarborSpotlight: View {
         guard items.indices.contains(page) else { return }
         manualRevision += 1
         index = page
+    }
+}
+
+/// tvOS's plain style adds padding that overlaps neighboring small indicators.
+private struct SpotlightIndicatorStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.contentShape(Rectangle())
     }
 }

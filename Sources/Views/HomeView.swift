@@ -203,6 +203,7 @@ struct CatalogRowView: View {
                 .accessibilityIdentifier("catalog.viewAll.\(row.title)")
             }
             .padding(.horizontal, 60)
+            .focusSection()
             ScrollViewReader { proxy in
                 ScrollView(.horizontal) {
                     LazyHStack(alignment: .top, spacing: 26) {

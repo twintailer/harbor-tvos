@@ -561,7 +561,6 @@ struct PlayerView: View {
         }
         .ignoresSafeArea()
         .transition(.opacity)
-        .accessibilityIdentifier("player.controls")
     }
 
     private func ctrlButton(_ c: Control, _ icon: String, big: Bool = false) -> some View {

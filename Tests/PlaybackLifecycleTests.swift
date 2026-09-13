@@ -59,7 +59,7 @@ struct PlaybackLifecycleTests {
                                            buttons: buttons, action: .upNext) == .upNext,
                    "Next-episode action is reachable")
         }
-        expect(PlaybackControl.vertical(from: .scrub, direction: -1, lastButton: .audio,
+        expect(PlaybackControl.vertical(from: .scrub, direction: -1, lastButton: .restart,
                                        buttons: buttons, action: nil) == .play,
                "Removed controls fall back to Play")
 

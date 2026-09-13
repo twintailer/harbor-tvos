@@ -8,6 +8,10 @@ enum HarborSection: String, CaseIterable, Identifiable {
     /// nil means leave the Menu/Back event to tvOS, not terminate the process.
     var backDestination: Self? { self == .home ? nil : .home }
 
+    var navigationItem: HarborNavigationItem {
+        self == .discover || self == .addons ? .more : .section(self)
+    }
+
     var label: String {
         switch self {
         case .home: return "Home"

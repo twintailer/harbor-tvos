@@ -60,10 +60,12 @@ struct RootView: View {
             }
         }
         .onPreferenceChange(HarborDetailNavigationKey.self) { detailIsOpen = $0 }
-        .modifier(HarborConditionalExitCommand(action: rootBackAction))
+        // Keep the modifier and view identity stable. An if/else wrapper here
+        // destroys the navigation stacks and focused tab when the action becomes nil.
+        .onExitCommand(perform: rootBackAction)
         .tint(HarborTVDesign.accent(interfaceStyle: interfaceStyle, fallback: accent))
         .preferredColorScheme(.dark)
-        .defaultFocus($navigationFocus, .section(.home))
+        .defaultFocus($navigationFocus, selection.navigationItem)
         .onChange(of: navigationFocus) { _, item in
             guard !detailIsOpen, let section = item?.destination else { return }
             select(section)
@@ -106,18 +108,6 @@ struct RootView: View {
     }
 }
 
-struct HarborConditionalExitCommand: ViewModifier {
-    let action: (() -> Void)?
-
-    @ViewBuilder func body(content: Content) -> some View {
-        if let action {
-            content.onExitCommand(perform: action)
-        } else {
-            content
-        }
-    }
-}
-
 /// Hide the global navigation on pushed details/settings pages. Their own
 /// NavigationStack then owns Back, including nested language pickers.
 struct HarborDetailNavigationKey: PreferenceKey {
@@ -131,10 +121,12 @@ private struct HarborTopNavigation: View {
     let onSelected: (HarborSection) -> Void
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            navigationBar(compact: false)
-            navigationBar(compact: true)
+        // One set of focus targets at every width. Swapping ViewThatFits branches
+        // as a label changes weight can replace the focused button mid-gesture.
+        GeometryReader { geometry in
+            navigationBar(compact: geometry.size.width < 1580)
         }
+        .frame(height: 74)
         .padding(.horizontal, 48).padding(.top, 12).padding(.bottom, 20)
     }
 
@@ -155,6 +147,7 @@ private struct HarborTopNavigation: View {
                     .buttonStyle(HarborNavigationTabStyle(selected: selection == section, compact: compact))
                     .focused(focus, equals: .section(section))
                     .accessibilityLabel(section.label)
+                    .accessibilityValue(selection == section ? "Selected" : "")
                     .accessibilityIdentifier("navigation.\(section.rawValue)")
                 }
             }
@@ -168,6 +161,7 @@ private struct HarborTopNavigation: View {
             .buttonStyle(HarborNavigationTabStyle(selected: selection == .discover || selection == .addons, compact: compact))
             .focused(focus, equals: .more)
             .accessibilityLabel("More: Discover and Add-ons")
+            .accessibilityValue(selection == .discover || selection == .addons ? "Selected" : "")
             .accessibilityIdentifier("navigation.more")
             Button { onSelected(.settings) } label: {
                 Image(systemName: "gearshape").frame(width: 24)
@@ -175,6 +169,7 @@ private struct HarborTopNavigation: View {
             .buttonStyle(HarborNavigationTabStyle(selected: selection == .settings, compact: compact))
             .focused(focus, equals: .section(.settings))
             .accessibilityLabel("Settings")
+            .accessibilityValue(selection == .settings ? "Selected" : "")
             .accessibilityIdentifier("navigation.settings")
         }
         .padding(.horizontal, 26).padding(.vertical, 12)
@@ -199,7 +194,7 @@ private struct HarborNavigationTabBody: View {
 
     var body: some View {
         configuration.label
-            .font(.system(size: compact ? 19 : 22, weight: selected || focused ? .bold : .medium))
+            .font(.system(size: compact ? 19 : 22, weight: .semibold))
             .foregroundStyle(focused ? .black : .white.opacity(selected ? 1 : 0.70))
             .padding(.horizontal, compact ? 13 : 21).frame(height: 50)
             .background(Capsule().fill(focused ? .white : (selected ? .white.opacity(0.16) : .clear)))

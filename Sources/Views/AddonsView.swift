@@ -9,7 +9,9 @@ struct AddonsView: View {
     @State private var pendingRemovalURL: String?
 
     var body: some View {
-        NavigationStack {
+        // Settings may push this page on its existing stack. A nested root stack
+        // would take ownership of Back before the containing Settings destination.
+        Group {
             ScrollView {
                 VStack(alignment: .leading, spacing: 28) {
                     HStack {

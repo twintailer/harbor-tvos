@@ -51,6 +51,13 @@ jobs:
             -o /tmp/harbor-playback-tests
           /tmp/harbor-playback-tests
 
+      - name: Catalog URL regression tests
+        run: |
+          swiftc -swift-version 5 -parse-as-library \
+            Sources/Services/CatalogURL.swift Tests/CatalogURLTests.swift \
+            -o /tmp/harbor-catalog-url-tests
+          /tmp/harbor-catalog-url-tests
+
       - name: Metadata text regression tests
         run: |
           cp -R Resources/MetadataText /tmp/MetadataText
@@ -99,6 +106,17 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build 2>&1 | tee build.log | tail -50
 
+      - name: Remote navigation UI tests on tvOS Simulator
+        run: |
+          set -o pipefail
+          DEVICE=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(v["udid"] for k,vs in d["devices"].items() if "tvOS" in k for v in vs if "Apple TV" in v["name"]))')
+          xcodebuild -project Harbor.xcodeproj -scheme HarborTVNavigationTests \
+            -destination "platform=tvOS Simulator,id=$DEVICE" \
+            -derivedDataPath build-simulator -clonedSourcePackagesDirPath spm \
+            -resultBundlePath navigation-tests.xcresult \
+            -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee navigation-tests.log | tail -70
+
       - name: Package IPA
         run: |
           APP=$(find build -name '*.app' -path '*appletvos*' | head -1)
@@ -106,7 +124,7 @@ jobs:
           test -n "$APP"
           mkdir -p Payload dist
           cp -R "$APP" Payload/
-          zip -r -q "dist/Harbor_tvOS_0.4.6_unsigned.ipa" Payload
+          zip -r -q "dist/Harbor_tvOS_0.4.7_unsigned.ipa" Payload
           ls -la dist
 
       - name: Upload IPA artifact
@@ -123,4 +141,15 @@ jobs:
         with:
           name: build-log
           path: build.log
+          if-no-files-found: ignore
+
+      - name: Upload navigation test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: navigation-test-results
+          path: |
+            navigation-tests.xcresult
+            navigation-tests.log
+          retention-days: 7
           if-no-files-found: ignore

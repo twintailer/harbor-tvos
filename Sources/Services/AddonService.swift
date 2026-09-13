@@ -52,9 +52,8 @@ enum AddonService {
         guard !Task.isCancelled else { return [] }
         var path = "\(base)/catalog/\(type)/\(id)"
         var extras: [String] = []
-        if let genre, !genre.isEmpty,
-           let enc = genre.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) {
-            extras.append("genre=\(enc)")
+        if let genre, !genre.isEmpty {
+            extras.append("genre=\(CatalogURL.encodeExtra(genre))")
         }
         if skip > 0 { extras.append("skip=\(skip)") }
         if !extras.isEmpty { path += "/" + extras.joined(separator: "&") }
@@ -96,9 +95,7 @@ enum AddonService {
     static func search(addons: [Addon], query: String) async -> [MetaItem] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !Task.isCancelled else { return [] }
-        var pathCharacters = CharacterSet.urlPathAllowed
-        pathCharacters.remove(charactersIn: "/?#&=+")
-        let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: pathCharacters) ?? trimmed
+        let encoded = CatalogURL.encodeExtra(trimmed)
         let sources = addons.flatMap { addon in
             (addon.manifest?.catalogs ?? []).filter {
                 ["movie", "series", "anime"].contains($0.type)

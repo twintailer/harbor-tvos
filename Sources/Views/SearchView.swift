@@ -48,6 +48,7 @@ struct SearchView: View {
         .task(id: "\(query)|\(addonRevision)") {
             let requestedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
             guard requestedQuery.count >= 2 else { results = []; searching = false; return }
+            results = []
             searching = true
             try? await Task.sleep(nanoseconds: 350_000_000)
             if Task.isCancelled { return }

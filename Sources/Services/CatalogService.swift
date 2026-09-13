@@ -9,9 +9,8 @@ enum CatalogService {
                         skip: Int = 0) async -> [MetaItem] {
         var path = "\(cinemeta)/catalog/\(type)/\(id)"
         var extras: [String] = []
-        if let genre, !genre.isEmpty,
-           let enc = genre.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) {
-            extras.append("genre=\(enc)")
+        if let genre, !genre.isEmpty {
+            extras.append("genre=\(CatalogURL.encodeExtra(genre))")
         }
         if skip > 0 { extras.append("skip=\(skip)") }
         if !extras.isEmpty { path += "/" + extras.joined(separator: "&") }
@@ -36,8 +35,8 @@ enum CatalogService {
     }
 
     static func search(query: String) async -> [MetaItem] {
-        guard let enc = query.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
-              !enc.isEmpty else { return [] }
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
+        let enc = CatalogURL.encodeExtra(query)
         async let movieHits = fetchSearch(type: "movie", query: enc)
         async let seriesHits = fetchSearch(type: "series", query: enc)
         let (movies, series) = await (movieHits, seriesHits)

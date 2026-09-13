@@ -24,6 +24,13 @@ struct TVNavigationTests {
         for section in HarborSection.allCases {
             expect(HarborBackPolicy.owner(section: section, detailIsOpen: true) == .child,
                    "A pushed detail page owns Back before the root or tvOS")
+            if section == .discover || section == .addons {
+                expect(section.navigationItem == .more,
+                       "Overflow pages restore focus to More, never to Home or a nonexistent tab")
+            } else {
+                expect(section.navigationItem.destination == section,
+                       "Default focus stays on the current tab when focus is restored")
+            }
         }
         expect(Set(HarborSection.topTabs).count == HarborSection.topTabs.count,
                "Top tabs have unique focus identities")

@@ -78,6 +78,19 @@ enum TVFocusPresentation {
     }
 }
 
+enum SpotlightPresentation {
+    static func topIDs(rows: [[String]]) -> [String] {
+        guard let first = rows.first(where: { !$0.isEmpty }) else { return [] }
+        var seen = Set<String>()
+        return Array(first.filter { seen.insert($0).inserted }.prefix(10))
+    }
+
+    static func advance(index: Int, by offset: Int, count: Int) -> Int {
+        guard count > 0 else { return 0 }
+        return ((index + offset) % count + count) % count
+    }
+}
+
 enum SettingsCategory: String, CaseIterable, Identifiable {
     case quick, playback, subtitles, library, streaming, account, appearance
     var id: String { rawValue }

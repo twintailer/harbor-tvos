@@ -47,7 +47,7 @@ struct PlaybackLifecycleTests {
         expect(owner.release(new), "Current player releases audio")
         expect(!owner.release(new), "Audio release is idempotent")
 
-        let buttons: [PlaybackControl] = [.restart, .play, .next, .source, .subs]
+        let buttons: [PlaybackControl] = [.back, .play, .fwd, .next, .subs, .audio, .more]
         for button in buttons {
             expect(PlaybackControl.vertical(from: button, direction: 1, lastButton: button,
                                            buttons: buttons, action: .skip) == .scrub,

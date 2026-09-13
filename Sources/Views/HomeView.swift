@@ -7,20 +7,19 @@ struct HomeView: View {
     @State private var loading = true
     @State private var refreshRevision = 0
     @State private var loadedRevision: String?
-    @State private var focusedPreview: MetaItem?
     @AppStorage(SubtitleStyle.Key.homeShowAllRows) private var showAllRows = false
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 46) {
-                    if let featured {
-                        HarborDesktopHero(item: featured, onSearch: onSearch)
+                    if !spotlightItems.isEmpty {
+                        HarborSpotlight(items: spotlightItems)
                     } else {
                         HarborHeroPlaceholder(onSearch: onSearch)
                     }
                     if !auth.continueWatching.isEmpty {
-                        ContinueRowView(entries: auth.continueWatching, onFocus: { focusedPreview = $0 }) { entry in
+                        ContinueRowView(entries: auth.continueWatching) { entry in
                             Task { await auth.clearContinueWatching(entry.id) }
                         }
                     }
@@ -45,7 +44,7 @@ struct HomeView: View {
                         }
                     }
                     ForEach(rows) { row in
-                        CatalogRowView(row: row, onFocus: { focusedPreview = $0 })
+                        CatalogRowView(row: row)
                     }
                 }
                 .padding(.bottom, 84)
@@ -61,7 +60,6 @@ struct HomeView: View {
             let revision = contentRevision
             // Returning from a title must preserve rails, pagination and focus.
             guard loadedRevision != revision else { return }
-            focusedPreview = nil
             loading = rows.isEmpty
             let loaded = await AddonService.homeRows(addons: auth.addons)
             guard !Task.isCancelled else { return }
@@ -69,11 +67,7 @@ struct HomeView: View {
             loadedRevision = revision
             loading = false
         }
-        .onChange(of: auth.continueWatching.map { $0.meta.contentKey }) { previous, current in
-            if let key = focusedPreview?.contentKey, previous.contains(key), !current.contains(key) {
-                focusedPreview = nil
-            }
-        }
+
     }
 
     private var addonRevision: String {
@@ -84,109 +78,10 @@ struct HomeView: View {
         "\(addonRevision)-\(showAllRows)-\(refreshRevision)"
     }
 
-    private var featured: MetaItem? {
-        focusedPreview ?? auth.continueWatching.first?.meta
-            ?? rows.lazy.flatMap(\.items).first(where: { $0.background != nil })
-            ?? rows.first?.items.first
-    }
-}
-
-private struct HarborDesktopHero: View {
-    let item: MetaItem
-    let onSearch: () -> Void
-
-    var body: some View {
-        ZStack(alignment: .topLeading) {
-            HarborPreviewArtwork(item: item, maxPixelSize: 2200, hero: true)
-                .id(item.contentKey)
-                .frame(maxWidth: .infinity)
-                .frame(height: 520)
-
-            LinearGradient(
-                stops: [
-                    .init(color: HarborTVDesign.canvas.opacity(0.99), location: 0),
-                    .init(color: .black.opacity(0.72), location: 0.35),
-                    .init(color: .black.opacity(0.16), location: 0.72),
-                    .init(color: .black.opacity(0.05), location: 1),
-                ], startPoint: .leading, endPoint: .trailing
-            )
-            LinearGradient(colors: [.black.opacity(0.08), .clear, HarborTVDesign.canvas],
-                           startPoint: .top, endPoint: .bottom)
-
-            HStack {
-                HStack(spacing: 9) {
-                    Rectangle()
-                        .fill(HarborTVDesign.cinemaRed)
-                        .frame(width: 4, height: 20)
-                    Text("HARBOR  /  HOME")
-                        .font(.system(size: 15, weight: .bold))
-                        .tracking(1.8)
-                        .foregroundStyle(.white.opacity(0.72))
-                }
-                Spacer()
-                searchChip
-            }
-            .padding(.horizontal, HarborTVDesign.pageInset)
-            .padding(.top, 24)
-
-            VStack(alignment: .leading, spacing: 16) {
-                Spacer()
-                Text("HARBOR SPOTLIGHT")
-                    .font(.system(size: 15, weight: .heavy))
-                    .tracking(2.4)
-                    .foregroundStyle(HarborTVDesign.cinemaRed)
-                Text(item.name)
-                        .font(.system(size: 62, weight: .bold))
-                    .foregroundStyle(.white)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.72)
-                    .frame(maxWidth: 720, alignment: .leading)
-
-                HStack(spacing: 12) {
-                    if let release = item.releaseInfo, !release.isEmpty { Text(release) }
-                    Text(item.type == "movie" ? "MOVIE" : (item.type == "anime" ? "ANIME" : "SERIES"))
-                        .font(.system(size: 13, weight: .heavy))
-                        .padding(.horizontal, 7).padding(.vertical, 3)
-                        .overlay(RoundedRectangle(cornerRadius: 3).stroke(.white.opacity(0.42), lineWidth: 1))
-                    if let rating = item.imdbRating, !rating.isEmpty { ImdbBadge(rating: rating) }
-                    if let runtime = item.runtime, !runtime.isEmpty { Text(runtime) }
-                }
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.72))
-
-                if let description = item.description, !description.isEmpty {
-                    Text(description)
-                        .font(.system(size: 21, weight: .regular))
-                        .foregroundStyle(.white.opacity(0.78))
-                        .lineLimit(3)
-                        .lineSpacing(3)
-                        .frame(maxWidth: 720, alignment: .leading)
-                }
-
-                HStack(spacing: 14) {
-                    NavigationLink(value: item) {
-                        Label("Watch options", systemImage: "play.fill")
-                    }
-                    .buttonStyle(HarborActionButtonStyle(tone: .primary))
-                }
-            }
-            .padding(.leading, HarborTVDesign.pageInset)
-            .padding(.bottom, 58)
-        }
-        .frame(height: 520)
-        .clipped()
-        .accessibilityIdentifier("home.preview.\(item.contentKey)")
-    }
-
-    private var searchChip: some View {
-        Button(action: onSearch) {
-            HStack(spacing: 11) {
-                Image(systemName: "magnifyingglass")
-                Text("Search")
-            }
-            .frame(minWidth: 145)
-        }
-        .buttonStyle(HarborActionButtonStyle(tone: .quiet))
+    private var spotlightItems: [MetaItem] {
+        guard let first = rows.first(where: { !$0.items.isEmpty }) else { return [] }
+        let ids = SpotlightPresentation.topIDs(rows: rows.map { $0.items.map(\.contentKey) })
+        return ids.compactMap { id in first.items.first { $0.contentKey == id } }
     }
 }
 
@@ -296,9 +191,18 @@ struct CatalogRowView: View {
             previous: previewItem?.contentKey, available: items.map(\.contentKey))
         let loadAheadID = items.suffix(4).first?.contentKey
         VStack(alignment: .leading, spacing: 16) {
-            HarborSectionHeading(title: row.title,
-                                 scale: CGFloat(titleScale))
-                .padding(.horizontal, 60)
+            HStack(spacing: 24) {
+                HarborSectionHeading(title: row.title, scale: CGFloat(titleScale))
+                NavigationLink {
+                    CatalogGridView(title: row.title, source: row.source,
+                                    initialItems: loadedItems, nextSkip: nextSkip, hasMore: hasMore)
+                } label: {
+                    Label("View all", systemImage: "square.grid.2x2")
+                }
+                .buttonStyle(HarborNavigationTabStyle(compact: true))
+                .accessibilityIdentifier("catalog.viewAll.\(row.title)")
+            }
+            .padding(.horizontal, 60)
             ScrollViewReader { proxy in
                 ScrollView(.horizontal) {
                     LazyHStack(alignment: .top, spacing: 26) {

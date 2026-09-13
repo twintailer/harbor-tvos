@@ -11,6 +11,11 @@ struct HarborTVApp: App {
     @StateObject private var auth = AuthStore()
 
     init() {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--ui-fixtures") {
+            URLProtocol.registerClass(HarborUIFixtureProtocol.self)
+        }
+        #endif
         HarborSettings.registerDefaults()
         Task.detached(priority: .utility) { MetadataText.prepare() }
         // Keep enough headroom for VideoToolbox + Anime4K. Oversized artwork/network
@@ -25,7 +30,7 @@ struct HarborTVApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView().environmentObject(auth)
+            entryView.environmentObject(auth)
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
                     Task {
                         await HarborArtworkCache.shared.purge()
@@ -33,6 +38,18 @@ struct HarborTVApp: App {
                     }
                 }
         }
+    }
+
+    @ViewBuilder private var entryView: some View {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--ui-player") {
+            PlayerView(target: PlayerTarget(title: "Harbor · The next chapter", url: URL(fileURLWithPath: "/dev/null"),
+                                           onEnded: {}))
+                .preferredColorScheme(.dark)
+        } else { RootView() }
+        #else
+        RootView()
+        #endif
     }
 }
 
@@ -46,16 +63,19 @@ struct RootView: View {
     var body: some View {
         ZStack {
             HarborStageBackground()
-            destination
-                .id(selection)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .focusSection()
-        }
-        // Keep the navigation outside the replaced destination. Moving between
-        // tabs must not destroy the currently focused button.
-        .safeAreaInset(edge: .top, spacing: 0) {
-            if !detailIsOpen {
-                HarborTopNavigation(selection: selection, focus: $navigationFocus, onSelected: select)
+            VStack(spacing: 0) {
+                if !detailIsOpen {
+                    HarborTopNavigation(selection: selection, focus: $navigationFocus, onSelected: select)
+                        .background(HarborTVDesign.canvas)
+                        .focusSection()
+                        .zIndex(1)
+                }
+                // A physical content region prevents nested navigation/scroll views
+                // from painting underneath the global navigation during scrolling.
+                destination
+                    .id(selection)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
                     .focusSection()
             }
         }

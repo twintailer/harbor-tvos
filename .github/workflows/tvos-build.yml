@@ -124,7 +124,7 @@ jobs:
           test -n "$APP"
           mkdir -p Payload dist
           cp -R "$APP" Payload/
-          zip -r -q "dist/Harbor_tvOS_0.4.7_unsigned.ipa" Payload
+          zip -r -q "dist/Harbor_tvOS_0.4.8_unsigned.ipa" Payload
           ls -la dist
 
       - name: Upload IPA artifact
@@ -151,5 +151,21 @@ jobs:
           path: |
             navigation-tests.xcresult
             navigation-tests.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Export UI screenshots
+        if: always()
+        run: |
+          if [ -d navigation-tests.xcresult ]; then
+            xcrun xcresulttool export attachments --path navigation-tests.xcresult --output-path ui-screenshots
+          fi
+
+      - name: Upload UI screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-screenshots
+          path: ui-screenshots
           retention-days: 7
           if-no-files-found: ignore

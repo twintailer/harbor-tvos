@@ -136,7 +136,8 @@ struct PlayerView: View {
     @AppStorage(SubtitleStyle.Key.showAnimeButton) private var showAnimeButton = true
 
     private typealias Control = PlaybackControl
-    private enum PanelKind { case audio, subtitles, subtitleSettings, aspect, speed, engine, anime, debug }
+    private enum PanelKind { case settings, audio, subtitles, subtitleSettings, aspect, speed, engine, anime, debug }
+    @State private var panelStack: [PanelKind] = []
     @State private var selected: Control = .play
     @State private var lastButton: Control = .play
     @State private var speed: Double = 1.0
@@ -187,7 +188,10 @@ struct PlayerView: View {
         ZStack(alignment: .bottom) {
             Color.black.ignoresSafeArea()
 
-            if usesVLC {
+            if isUIReview {
+                LinearGradient(colors: [Color(white: 0.14), Color(white: 0.025)],
+                               startPoint: .topLeading, endPoint: .bottomTrailing).ignoresSafeArea()
+            } else if usesVLC {
                 VLCPlayerView(url: target.url, model: model, startAt: currentStartAt,
                               requestHeaders: target.requestHeaders)
                     .ignoresSafeArea()
@@ -231,7 +235,7 @@ struct PlayerView: View {
                 }
                 .padding(.top, 48)
             }
-            if showInfo, transitionMessage == nil, !terminalError { controlBar }
+            if showInfo, !showOptions, transitionMessage == nil, !terminalError { controlBar }
             if showOptions, transitionMessage == nil { optionsPanel }
             if let segment = activeSkip, skipButtonVisible, showSkipButton, !showOptions, !handledEnd {
                 skipPill(segment)
@@ -305,6 +309,12 @@ struct PlayerView: View {
         }
         .onAppear {
             isVisible = true
+            if isUIReview {
+                model.position = 1234; model.duration = 5400
+                model.buffering = false; model.playbackStarted = true; model.paused = true
+                showInfo = true; selected = .play
+                return
+            }
             showInfo = true; selected = .play; scheduleHide()
             animeActive = shouldStartAnime4K
             let initialEngine = activeEngine
@@ -323,6 +333,14 @@ struct PlayerView: View {
     }
 
     // MARK: - Remote handling
+
+    private var isUIReview: Bool {
+        #if DEBUG
+        return ProcessInfo.processInfo.arguments.contains("--ui-player")
+        #else
+        return false
+        #endif
+    }
 
     private func handlePress(_ type: UIPress.PressType) {
         guard !handledEnd, !isSwitching else { return }
@@ -397,11 +415,10 @@ struct PlayerView: View {
             return
         }
         if showOptions {
-            switch panelKind {
-            case .subtitleSettings: openPanel(.subtitles)
-            case .debug: openPanel(.aspect)
-            default: closePanel()
-            }
+            if let parent = panelStack.popLast() {
+                panelKind = parent
+                optionRow = optionRows.firstIndex { !$0.isHeader } ?? 0
+            } else { closePanel() }
             return
         }
         if scrubbing {
@@ -418,20 +435,13 @@ struct PlayerView: View {
 
     private var buttonRow: [Control] {
         var c: [Control] = []
-        if showRestartButton { c.append(.restart) }
         if showSeekButtons { c.append(.back) }
         c.append(.play)
         if showSeekButtons { c.append(.fwd) }
         if showNextButton, target.onEnded != nil { c.append(.next) }
-        if target.onChangeSource != nil { c.append(.source) }
-        c.append(.engine)
-        if showSpeedButton { c.append(.speed) }
         if showSubtitleButton { c.append(.subs) }
         if showAudioButton, !audioTracks.isEmpty { c.append(.audio) }
-        if showAspectButton { c.append(.aspect) }
-        // Keep the control visible so non-anime content explains why the filter
-        // is unavailable instead of silently exposing a crash-prone toggle.
-        if showAnimeButton { c.append(.anime) }
+        c.append(.more)
         return c
     }
 
@@ -482,6 +492,7 @@ struct PlayerView: View {
         case .aspect:  openPanel(.aspect)
         case .speed:   openPanel(.speed)
         case .anime:   openPanel(.anime)
+        case .more:    openPanel(.settings)
         }
     }
 
@@ -502,95 +513,86 @@ struct PlayerView: View {
         return parts.joined(separator: "  ·  ")
     }
 
-    /// Bottom player chrome matching the supplied Apple TV reference: title and
-    /// transport on one line, utility circles on the right, then a full-width
-    /// timeline and elapsed/remaining clocks over a soft video gradient.
+    /// Primary controls stay in one quiet row; advanced options live in More.
     private var controlBar: some View {
         VStack {
             Spacer()
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .bottom, spacing: 28) {
-                    VStack(alignment: .leading, spacing: 3) {
-                    if !target.title.isEmpty {
-                            Text(target.title)
-                                .font(.system(size: 40 * playerTitleScale, weight: .bold))
-                            .foregroundStyle(.white).lineLimit(1)
-                    }
+            VStack(alignment: .leading, spacing: 22) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(target.title)
+                        .font(.system(size: 32 * playerTitleScale, weight: .semibold))
+                        .foregroundStyle(.white).lineLimit(1)
+                    Spacer(minLength: 24)
                     if !metadataLine.isEmpty {
-                            Text(metadataLine).font(.system(size: 18, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.66))
-                        }
+                        Text(metadataLine).font(.system(size: 17, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.60))
                     }
-                    Spacer()
                 }
-
-                HarborPlayerGlassGroup {
-                  HStack(alignment: .center, spacing: 16) {
-                    HStack(spacing: 14) {
-                        if showRestartButton { ctrlButton(.restart, "arrow.counterclockwise") }
-                        if showSeekButtons { ctrlButton(.back, "gobackward.\(seekBackStep)") }
-                        ctrlButton(.play, model.paused ? "play.fill" : "pause.fill", big: true)
-                        if showSeekButtons { ctrlButton(.fwd, "goforward.\(seekForwardStep)") }
-                        if showNextButton, target.onEnded != nil { ctrlButton(.next, "forward.end.fill") }
-                    }
-                    Spacer()
-                    HStack(spacing: 14) {
-                        if target.onChangeSource != nil { ctrlButton(.source, "rectangle.2.swap") }
-                        ctrlButton(.engine, "play.rectangle.on.rectangle")
-                        if showSpeedButton { ctrlButton(.speed, "speedometer") }
-                        if showSubtitleButton { ctrlButton(.subs, "captions.bubble.fill") }
-                        if showAudioButton, !audioTracks.isEmpty { ctrlButton(.audio, "waveform.circle.fill") }
-                        if showAspectButton { ctrlButton(.aspect, "aspectratio") }
-                        if showAnimeButton { ctrlButton(.anime, "sparkles") }
-                    }
-                  }
+                HStack(alignment: .center, spacing: 18) {
+                    if showSeekButtons { ctrlButton(.back, "gobackward.\(seekBackStep)") }
+                    ctrlButton(.play, model.paused ? "play.fill" : "pause.fill", big: true)
+                    if showSeekButtons { ctrlButton(.fwd, "goforward.\(seekForwardStep)") }
+                    if showNextButton, target.onEnded != nil { ctrlButton(.next, "forward.end.fill") }
+                    Spacer(minLength: 36)
+                    if showSubtitleButton { ctrlButton(.subs, "captions.bubble") }
+                    if showAudioButton, !audioTracks.isEmpty { ctrlButton(.audio, "waveform") }
+                    ctrlButton(.more, "ellipsis")
                 }
-
-                HStack {
-                    Text(controlLabel(selected))
-                        .font(.system(size: 18, weight: .semibold))
-                    Spacer()
-                    Text(selected == .scrub ? "← → Seek · Select to confirm" : "↓ Timeline · Back to hide")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.55))
-                }
-                .foregroundStyle(.white.opacity(0.88))
-
                 HarborPlayerTimeline(clock: model.clock,
                                      previewPosition: scrubbing ? scrubTarget : nil,
                                      focused: selected == .scrub, accent: accent)
+                HStack {
+                    Text(selected == .scrub ? "← → Seek · Select to confirm" : "↓ Timeline")
+                    Spacer()
+                    Text("Back to hide controls")
+                }
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.white.opacity(0.45))
             }
-            .padding(.horizontal, 68)
-            .padding(.bottom, 42)
+            .padding(.horizontal, 76).padding(.bottom, 38)
         }
         .background(alignment: .bottom) {
-            LinearGradient(
-                stops: [
-                    .init(color: .clear, location: 0),
-                    .init(color: .black.opacity(0.24), location: 0.24),
-                    .init(color: .black.opacity(0.78), location: 0.72),
-                    .init(color: .black.opacity(0.94), location: 1),
-                ], startPoint: .top, endPoint: .bottom)
-                .frame(height: 430)
-                .ignoresSafeArea()
+            LinearGradient(stops: [
+                .init(color: .clear, location: 0),
+                .init(color: .black.opacity(0.55), location: 0.36),
+                .init(color: .black.opacity(0.92), location: 1)
+            ], startPoint: .top, endPoint: .bottom)
+            .frame(height: 400).ignoresSafeArea()
         }
         .ignoresSafeArea()
         .transition(.opacity)
+        .accessibilityIdentifier("player.controls")
     }
 
     private func ctrlButton(_ c: Control, _ icon: String, big: Bool = false) -> some View {
-        let sel = (selected == c)
-        let d: CGFloat = big ? 78 : 68
-        return Image(systemName: icon)
-            .font(.system(size: big ? 31 : 25, weight: .semibold))
-            .foregroundStyle(sel ? .black : .white)
-            .frame(width: d, height: d)
-            .background(Circle().fill(sel ? Color.white : Color.white.opacity(0.13)))
-            .harborGlass(cornerRadius: d / 2, tint: sel ? .white.opacity(0.7) : .black.opacity(0.04))
-            .overlay(Circle().stroke(.white.opacity(sel ? 0.92 : 0.28), lineWidth: sel ? 2.5 : 1))
-            .shadow(color: .black.opacity(sel ? 0.30 : 0), radius: 6, y: 3)
-            .scaleEffect(sel ? 1.05 : 1.0)
-            .animation(.easeOut(duration: 0.14), value: sel)
+        let sel = selected == c
+        let size: CGFloat = big ? 72 : 60
+        let label: String = {
+            switch c {
+            case .back: return "−\(seekBackStep)s"
+            case .fwd: return "+\(seekForwardStep)s"
+            case .subs: return "Subtitles"
+            case .audio: return "Audio"
+            case .next: return "Next"
+            default: return controlLabel(c)
+            }
+        }()
+        return VStack(spacing: 9) {
+            Image(systemName: icon)
+                .font(.system(size: big ? 29 : 23, weight: .semibold))
+                .foregroundStyle(sel ? .black : .white)
+                .frame(width: size, height: size)
+                .background(Circle().fill(sel ? .white : .white.opacity(big ? 0.18 : 0.07)))
+                .overlay(Circle().strokeBorder(.white.opacity(sel ? 1 : 0.10), lineWidth: 1))
+            Text(label).font(.system(size: 15, weight: sel ? .semibold : .medium))
+                .foregroundStyle(.white.opacity(sel ? 1 : 0.62)).lineLimit(1)
+        }
+        .frame(width: 96, height: 105, alignment: .bottom)
+        .animation(.easeOut(duration: 0.14), value: sel)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .accessibilityValue(sel ? "Selected" : "")
+        .accessibilityIdentifier("player.control.\(c)")
     }
 
     private func skipPill(_ segment: SkipSegment) -> some View {
@@ -666,6 +668,15 @@ struct PlayerView: View {
 
     private var optionRows: [OptionRow] {
         switch panelKind {
+        case .settings:
+            var rows: [OptionRow] = []
+            if showSpeedButton { rows.append(OptionRow(label: "Playback speed", detail: String(format: "%gx", speed)) { openPanel(.speed) }) }
+            if showAspectButton { rows.append(OptionRow(label: "Picture size", detail: "›") { openPanel(.aspect) }) }
+            if showRestartButton { rows.append(OptionRow(label: "Restart from beginning") { restart() }) }
+            if target.onChangeSource != nil { rows.append(OptionRow(label: "Change source", detail: "›") { changeSource() }) }
+            rows.append(OptionRow(label: "Playback engine", detail: engineDisplayName(activeEngine)) { openPanel(.engine) })
+            if showAnimeButton { rows.append(OptionRow(label: "Anime4K", detail: animeActive ? "On" : "Off") { openPanel(.anime) }) }
+            return rows
         case .audio:
             var rows = groupedTrackRows(audioTracks, selectedID: selectedAudioTrackID) { setAudio($0) }
             rows.append(OptionRow(label: "Audio sync", detail: String(format: "%+.1fs", audioDelay), isHeader: true))
@@ -910,6 +921,7 @@ struct PlayerView: View {
 
     private var panelTitle: String {
         switch panelKind {
+        case .settings: return "Playback settings"
         case .audio: return "Audio"
         case .subtitles: return "Subtitles"
         case .subtitleSettings: return "Subtitle Settings"
@@ -930,6 +942,7 @@ struct PlayerView: View {
                 Spacer()
                 VStack(alignment: .leading, spacing: 0) {
                     Text(panelTitle)
+                        .accessibilityIdentifier("player.panel.title")
                         .font(.system(size: 28, weight: .bold)).foregroundStyle(.white)
                         .padding(.horizontal, 28).padding(.top, 26).padding(.bottom, 10)
                     ScrollViewReader { proxy in
@@ -963,7 +976,7 @@ struct PlayerView: View {
                                         .foregroundStyle(focused ? .black : .white)
                                         .padding(.horizontal, 18).padding(.vertical, 11)
                                         .background(focused ? Color.white.opacity(0.94) : Color.clear)
-                                        .clipShape(Capsule(style: .continuous))
+                                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                                         .scaleEffect(focused ? 1.012 : 1)
                                         .animation(.easeOut(duration: 0.14), value: focused)
                                         .id(i)
@@ -979,15 +992,15 @@ struct PlayerView: View {
                 }
                 .frame(width: wide ? 690 : 540)
                 .frame(height: wide ? 720 : min(600, CGFloat(max(2, rows.count)) * 61 + 82))
-                .harborGlass(cornerRadius: 34, tint: Color.black.opacity(0.20))
+                .background(Color(white: 0.075).opacity(0.98), in: RoundedRectangle(cornerRadius: 24))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 34, style: .continuous)
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
                         .stroke(.white.opacity(0.26), lineWidth: 1.2)
                 }
                 .shadow(color: .black.opacity(0.58), radius: 34, y: 18)
                 .padding(.trailing, 68)
             }
-            .padding(.bottom, wide ? 44 : 220)
+            .padding(.bottom, 64)
         }
         .ignoresSafeArea()
         .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottomTrailing)))
@@ -1011,6 +1024,8 @@ struct PlayerView: View {
         if panelKind == previousPanel { closePanel() }
     }
     private func openPanel(_ kind: PanelKind) {
+        if showOptions, panelKind != kind { panelStack.append(panelKind) }
+        if !showOptions { panelStack = [] }
         panelKind = kind
         refreshTracks()
         hideTask?.cancel()
@@ -1019,6 +1034,7 @@ struct PlayerView: View {
         withAnimation { showOptions = true }
     }
     private func closePanel() {
+        panelStack = []
         withAnimation { showOptions = false }
         showInfo = true
         selected = buttonRow.contains(lastButton) ? lastButton : .play
@@ -1563,6 +1579,7 @@ struct PlayerView: View {
         case .aspect: return "Picture size"
         case .speed: return "Playback speed"
         case .anime: return "Anime4K"
+        case .more: return "More"
         case .scrub: return "Timeline"
         }
     }
@@ -1627,18 +1644,6 @@ struct PlayerView: View {
         guard t.isFinite, t >= 0, t < Double(Int.max) else { return "0:00" }
         let s = Int(t), h = s / 3600, m = (s % 3600) / 60, sec = s % 60
         return h > 0 ? String(format: "%d:%02d:%02d", h, m, sec) : String(format: "%d:%02d", m, sec)
-    }
-}
-
-private struct HarborPlayerGlassGroup<Content: View>: View {
-    @ViewBuilder let content: () -> Content
-
-    @ViewBuilder var body: some View {
-        if #available(tvOS 26.0, *) {
-            GlassEffectContainer(spacing: 12) { content() }
-        } else {
-            content()
-        }
     }
 }
 

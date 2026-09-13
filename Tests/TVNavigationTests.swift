@@ -44,6 +44,13 @@ struct TVNavigationTests {
                "Moving onto More must not open Discover or replace the current page")
 
         let titles = ["movie:a", "movie:b", "series:a"]
+        let topIDs = (1...14).map { "movie:\($0)" }
+        expect(SpotlightPresentation.topIDs(rows: [[], [topIDs[0]] + topIDs, ["series:other"]]) == Array(topIDs.prefix(10)),
+               "Spotlight preserves the first catalog's ranking, removes duplicates and limits it to ten")
+        expect(SpotlightPresentation.topIDs(rows: []) == [], "Empty catalogs have no spotlight")
+        expect(SpotlightPresentation.advance(index: 9, by: 1, count: 10) == 0, "Autoplay wraps after the tenth title")
+        expect(SpotlightPresentation.advance(index: 0, by: -1, count: 10) == 9, "Previous wraps to the tenth title")
+        expect(SpotlightPresentation.advance(index: 0, by: 1, count: 0) == 0, "Empty carousel cannot divide by zero")
         var previous: String?
         func preview(_ focused: String?, available: [String] = titles) -> String? {
             let result = TVFocusPresentation.previewID(focused: focused,

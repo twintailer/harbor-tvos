@@ -9,6 +9,7 @@ struct MetaItem: Codable, Identifiable, Hashable {
     var name: String { MetadataText.display(sourceName) }
     let poster: String?
     let background: String?
+    let logo: String?
     private let sourceDescription: String?
     var description: String? { sourceDescription.map(MetadataText.display) }
     let releaseInfo: String?
@@ -19,17 +20,18 @@ struct MetaItem: Codable, Identifiable, Hashable {
     var contentKey: String { "\(type):\(id)" }
 
     enum CodingKeys: String, CodingKey {
-        case id, type, poster, background, releaseInfo, imdbRating, genres, runtime, videos
+        case id, type, poster, background, logo, releaseInfo, imdbRating, genres, runtime, videos
         case sourceName = "name", sourceDescription = "description"
     }
 
     init(id: String, type: String, name: String, poster: String?, background: String?,
          description: String?, releaseInfo: String?, imdbRating: String?, genres: [String]?,
-         runtime: String?, videos: [Video]?) {
+         runtime: String?, videos: [Video]?, logo: String? = nil) {
         self.id = id; self.type = type; sourceName = name
         self.poster = poster; self.background = background; sourceDescription = description
         self.releaseInfo = releaseInfo; self.imdbRating = imdbRating; self.genres = genres
         self.runtime = runtime; self.videos = videos
+        self.logo = logo
     }
 
     static func unique(_ items: [MetaItem], excluding existing: [MetaItem] = []) -> [MetaItem] {
@@ -97,7 +99,7 @@ struct MetaItem: Codable, Identifiable, Hashable {
     func withVideos(_ v: [Video]) -> MetaItem {
         MetaItem(id: id, type: type, name: sourceName, poster: poster, background: background,
                  description: sourceDescription, releaseInfo: releaseInfo, imdbRating: imdbRating,
-                 genres: genres, runtime: runtime, videos: v)
+                 genres: genres, runtime: runtime, videos: v, logo: logo)
     }
 }
 

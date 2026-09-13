@@ -95,6 +95,7 @@ struct HarborPageHeader: View {
                 Text(title)
                     .font(.system(size: 50, weight: .bold))
                     .foregroundStyle(HarborTVDesign.primaryText)
+                    .accessibilityIdentifier("page.title.\(title)")
                 if let count {
                     Text("\(count)")
                         .font(.system(size: 20, weight: .semibold))

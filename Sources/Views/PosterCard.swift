@@ -36,6 +36,7 @@ struct PosterCard: View {
             .buttonStyle(HarborCardFocusStyle(
                 radius: posterRadius, accent: focusColor,
                 scale: 1.065, reduceMotion: reduceArtworkMotion))
+            .accessibilityIdentifier("poster.\(item.contentKey)")
             .contextMenu {
                 if let onRemoveFromHistory {
                     Button(role: .destructive, action: onRemoveFromHistory) {

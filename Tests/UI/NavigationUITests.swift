@@ -8,6 +8,7 @@ final class NavigationUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
         app = XCUIApplication()
+        app.launchArguments = ["--ui-fixtures"]
         app.launch()
         assertTab("home")
     }
@@ -88,6 +89,84 @@ final class NavigationUITests: XCTestCase {
         XCTAssertEqual(app.state, .runningForeground)
         remote.press(.menu)
         assertTab("home")
+    }
+
+    func testTopBarDoesNotOverlapPageContent() {
+        for (section, title) in [("series", "Series"), ("movies", "Movies"), ("anime", "Anime"), ("catalogs", "Catalogs")] {
+            remote.press(.right)
+            assertTab(section)
+            let heading = app.staticTexts["page.title.\(title)"]
+            XCTAssertTrue(heading.waitForExistence(timeout: 10))
+            XCTAssertGreaterThan(heading.frame.minY, app.buttons["navigation.\(section)"].frame.maxY,
+                                 "Content must occupy its own region below navigation")
+        }
+        capture("Catalogs below navigation")
+    }
+
+    func testSpotlightAutoRotatesAndAllowsManualSelection() {
+        let position = app.staticTexts["spotlight.position"]
+        XCTAssertTrue(position.waitForExistence(timeout: 10))
+        let initial = position.label
+        waitUntil("Spotlight advances automatically while navigation owns focus") { position.label != initial }
+        let page = app.buttons["spotlight.page.4"]
+        focus(page)
+        waitUntil("Focusing a carousel indicator selects its title") { position.label == "5 / 10" }
+        capture("Top 10 spotlight")
+        let change = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in position.label != "5 / 10" }, object: nil)
+        change.isInverted = true
+        XCTAssertEqual(XCTWaiter.wait(for: [change], timeout: 9), .completed,
+                       "Manual focus pauses autoplay so Select cannot open an unexpected title")
+    }
+
+    func testViewAllOpensFullScreenGridAndReturnsToCatalogs() {
+        for _ in 0..<4 { remote.press(.right) }
+        assertTab("catalogs")
+        let all = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "catalog.viewAll.")).firstMatch
+        focus(all)
+        remote.press(.select)
+        let back = app.buttons["catalog.grid.back"]
+        XCTAssertTrue(back.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["navigation.catalogs"].exists)
+        let first = app.buttons["poster.movie:fixture1"]
+        let nextRow = app.buttons["poster.movie:fixture7"]
+        XCTAssertTrue(first.waitForExistence(timeout: 10))
+        XCTAssertTrue(nextRow.exists)
+        XCTAssertGreaterThan(nextRow.frame.minY, first.frame.minY, "View all uses multiple rows, not a horizontal rail")
+        capture("Full screen catalog grid")
+        remote.press(.menu)
+        waitUntil("Back restores the catalog screen") {
+            self.app.buttons["navigation.catalogs"].value as? String == "Selected"
+        }
+        remote.press(.menu)
+        assertTab("home")
+    }
+
+    func testPlayerMoreMenuAndNestedBack() {
+        app.terminate()
+        app.launchArguments = ["--ui-fixtures", "--ui-player"]
+        app.launch()
+        let play = app.descendants(matching: .any)["player.control.play"]
+        XCTAssertTrue(play.waitForExistence(timeout: 10))
+        capture("Player controls")
+        for _ in 0..<4 { remote.press(.right) }
+        remote.press(.select)
+        let title = app.staticTexts["player.panel.title"]
+        waitUntil("More opens playback settings") { title.label == "Playback settings" }
+        capture("Player settings")
+        remote.press(.select)
+        waitUntil("Speed opens a nested panel") { title.label == "Playback Speed" }
+        remote.press(.menu)
+        waitUntil("Back returns one level to More") { title.label == "Playback settings" }
+        remote.press(.menu)
+        XCTAssertTrue(play.waitForExistence(timeout: 10))
+        XCTAssertEqual(app.state, .runningForeground)
+    }
+
+    private func capture(_ name: String) {
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = name
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
     }
 
     private func assertTab(_ section: String, file: StaticString = #filePath, line: UInt = #line) {

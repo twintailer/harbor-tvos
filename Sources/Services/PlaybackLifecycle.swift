@@ -54,7 +54,7 @@ struct PlaybackOwnership {
 }
 
 enum PlaybackControl: Hashable {
-    case skip, upNext, restart, back, play, fwd, next, source, engine, audio, subs, aspect, speed, anime, scrub
+    case skip, upNext, restart, back, play, fwd, next, source, engine, audio, subs, aspect, speed, anime, more, scrub
 
     static func vertical(from current: Self, direction: Int, lastButton: Self,
                          buttons: [Self], action: Self?) -> Self {

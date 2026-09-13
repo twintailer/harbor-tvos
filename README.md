@@ -75,7 +75,7 @@ The GitHub workflow builds an unsigned tvOS IPA on a macOS runner:
 gh workflow run tvos-build.yml
 ```
 
-Artifact: `harbor-tvos` → `Harbor_tvOS_0.4.5_unsigned.ipa`.
+Artifact: `harbor-tvos` → `Harbor_tvOS_0.4.6_unsigned.ipa`.
 
 The workflow uses the standard `macos-latest` runner in the public repository;
 it does not consume private-repository included minutes. A public-only job guard

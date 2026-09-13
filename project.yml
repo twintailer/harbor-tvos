@@ -46,8 +46,8 @@ targets:
       path: Info.plist
       properties:
         CFBundleDisplayName: Harbor
-        CFBundleShortVersionString: "0.4.5"
-        CFBundleVersion: "20"
+        CFBundleShortVersionString: "0.4.6"
+        CFBundleVersion: "21"
         UIRequiredDeviceCapabilities: [arm64]
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true

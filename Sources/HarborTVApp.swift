@@ -57,10 +57,10 @@ struct RootView: View {
             if !detailIsOpen {
                 HarborTopNavigation(selection: selection, focus: $navigationFocus, onSelected: select)
                     .focusSection()
-                    .onExitCommand(perform: rootBackAction)
             }
         }
         .onPreferenceChange(HarborDetailNavigationKey.self) { detailIsOpen = $0 }
+        .modifier(HarborConditionalExitCommand(action: rootBackAction))
         .tint(HarborTVDesign.accent(interfaceStyle: interfaceStyle, fallback: accent))
         .preferredColorScheme(.dark)
         .defaultFocus($navigationFocus, .section(.home))
@@ -71,7 +71,9 @@ struct RootView: View {
     }
 
     private var rootBackAction: (() -> Void)? {
-        guard let parent = selection.backDestination else { return nil }
+        guard case let .root(parent) = HarborBackPolicy.owner(
+            section: selection, detailIsOpen: detailIsOpen
+        ) else { return nil }
         return {
             select(parent)
             navigationFocus = .section(parent)
@@ -91,15 +93,27 @@ struct RootView: View {
         // Home deliberately installs NO exit-command handler. The unhandled
         // Back/Menu press reaches tvOS and returns to the system Home screen.
         case .home: HomeView(onSearch: { select(.search) })
-        case .movies: MediaBrowseView(title: "Movies", type: "movie", onRootBack: { select(.home) })
-        case .series: MediaBrowseView(title: "Series", type: "series", onRootBack: { select(.home) })
-        case .anime: MediaBrowseView(title: "Anime", type: "anime", fallbackGenre: "Animation", onRootBack: { select(.home) })
-        case .discover: DiscoverView(onRootBack: { select(.home) })
-        case .catalogs: CatalogsView(onRootBack: { select(.home) })
-        case .library: LibraryView(onRootBack: { select(.home) })
-        case .addons: AddonsView(onRootBack: { select(.home) })
-        case .search: SearchView(onRootBack: { select(.home) })
-        case .settings: SettingsView(onRootBack: { select(.home) })
+        case .movies: MediaBrowseView(title: "Movies", type: "movie")
+        case .series: MediaBrowseView(title: "Series", type: "series")
+        case .anime: MediaBrowseView(title: "Anime", type: "anime", fallbackGenre: "Animation")
+        case .discover: DiscoverView()
+        case .catalogs: CatalogsView()
+        case .library: LibraryView()
+        case .addons: AddonsView()
+        case .search: SearchView()
+        case .settings: SettingsView()
+        }
+    }
+}
+
+struct HarborConditionalExitCommand: ViewModifier {
+    let action: (() -> Void)?
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if let action {
+            content.onExitCommand(perform: action)
+        } else {
+            content
         }
     }
 }

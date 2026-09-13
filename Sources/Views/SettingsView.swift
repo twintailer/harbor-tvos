@@ -4,7 +4,6 @@ import SwiftUI
 // TV settings use a category dashboard and short pages within each panel.
 // Persistent setting keys stay shared with the existing playback and browsing consumers.
 struct SettingsView: View {
-    var onRootBack: () -> Void = {}
     @State private var category: SettingsCategory = .quick
     @FocusState private var focusedCategory: SettingsCategory?
     @FocusState private var focusedRoute: SettingsRoute?
@@ -72,7 +71,6 @@ struct SettingsView: View {
                 .padding(.horizontal, 60).padding(.top, 22)
             }
             .background(HarborStageBackground())
-            .onExitCommand(perform: onRootBack)
             .navigationDestination(for: SettingsRoute.self) { route in
                 SettingsDestinationView(route: route)
                     .preference(key: HarborDetailNavigationKey.self, value: true)

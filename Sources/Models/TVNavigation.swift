@@ -38,6 +38,21 @@ enum HarborSection: String, CaseIterable, Identifiable {
     }
 }
 
+enum HarborBackOwner: Equatable {
+    case system
+    case root(HarborSection)
+    case child
+}
+
+enum HarborBackPolicy {
+    /// Exactly one layer owns every Menu/Back press. tvOS receives it only on Harbor Home.
+    static func owner(section: HarborSection, detailIsOpen: Bool) -> HarborBackOwner {
+        if detailIsOpen { return .child }
+        if let destination = section.backDestination { return .root(destination) }
+        return .system
+    }
+}
+
 /// The More menu is a focus target, but it is not a destination page.
 enum HarborNavigationItem: Hashable {
     case section(HarborSection)

@@ -13,9 +13,17 @@ struct TVNavigationTests {
 
         expect(HarborSection.home.backDestination == nil,
                "Home must leave Back to tvOS rather than consume the command")
+        expect(HarborBackPolicy.owner(section: .home, detailIsOpen: false) == .system,
+               "Only Harbor Home leaves Back to tvOS")
         for section in HarborSection.allCases where section != .home {
             expect(section.backDestination == .home,
                    "Back from a top-level section returns to Home in one step")
+            expect(HarborBackPolicy.owner(section: section, detailIsOpen: false) == .root(.home),
+                   "Every top-level page, including Search, is caught by the root boundary")
+        }
+        for section in HarborSection.allCases {
+            expect(HarborBackPolicy.owner(section: section, detailIsOpen: true) == .child,
+                   "A pushed detail page owns Back before the root or tvOS")
         }
         expect(Set(HarborSection.topTabs).count == HarborSection.topTabs.count,
                "Top tabs have unique focus identities")

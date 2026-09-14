@@ -27,6 +27,7 @@ struct CatalogsView: View {
             }
             .background(HarborStageBackground())
             .navigationDestination(for: MetaItem.self) { DetailView(item: $0) }
+            .navigationDestination(for: CatalogGridRoute.self) { CatalogGridView(route: $0) }
         }
         .task(id: "\(addonRevision)-\(showAllRows)") {
             let revision = "\(addonRevision)-\(showAllRows)"

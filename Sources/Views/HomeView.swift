@@ -54,6 +54,7 @@ struct HomeView: View {
             .navigationDestination(for: MetaItem.self) { item in
                 DetailView(item: item)
             }
+            .navigationDestination(for: CatalogGridRoute.self) { CatalogGridView(route: $0) }
         }
         // Rebuild rows when the signed-in addons change.
         .task(id: contentRevision) {
@@ -193,10 +194,8 @@ struct CatalogRowView: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 24) {
                 HarborSectionHeading(title: row.title, scale: CGFloat(titleScale))
-                NavigationLink {
-                    CatalogGridView(title: row.title, source: row.source,
-                                    initialItems: loadedItems, nextSkip: nextSkip, hasMore: hasMore)
-                } label: {
+                NavigationLink(value: CatalogGridRoute(id: row.id, title: row.title, source: row.source,
+                    items: loadedItems, nextSkip: nextSkip, hasMore: hasMore)) {
                     Label("View all", systemImage: "square.grid.2x2")
                 }
                 .buttonStyle(HarborNavigationTabStyle(compact: true))

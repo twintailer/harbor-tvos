@@ -1,5 +1,19 @@
 import SwiftUI
 
+/// The catalog overview and its titles share the same value-based path. Mixing
+/// a view-based overview link with value-based poster links can discard a push.
+struct CatalogGridRoute: Hashable {
+    let id: UUID
+    let title: String
+    let source: CatalogPageSource?
+    let items: [MetaItem]
+    let nextSkip: Int
+    let hasMore: Bool
+
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
+}
+
 /// Opens on the parent catalog's stack, retaining its rail position on Back.
 /// The raw server offset is passed separately from deduplicated/filtered titles.
 struct CatalogGridView: View {
@@ -14,6 +28,11 @@ struct CatalogGridView: View {
     @State private var nextSkip: Int
     @State private var hasMore: Bool
     @State private var loading = false
+
+    init(route: CatalogGridRoute) {
+        self.init(title: route.title, source: route.source, initialItems: route.items,
+                  nextSkip: route.nextSkip, hasMore: route.hasMore)
+    }
 
     init(title: String, source: CatalogPageSource?, initialItems: [MetaItem], nextSkip: Int, hasMore: Bool) {
         self.title = title

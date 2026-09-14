@@ -260,6 +260,7 @@ struct DetailView: View {
                 }
                 .buttonStyle(HarborActionButtonStyle(tone: .primary))
                 .focused($focusedAction, equals: .play)
+                .accessibilityIdentifier("detail.play")
                 .disabled(resolving)
 
                 if !(meta.videos ?? []).isEmpty {

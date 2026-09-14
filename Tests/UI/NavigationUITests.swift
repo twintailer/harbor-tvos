@@ -133,6 +133,12 @@ final class NavigationUITests: XCTestCase {
         XCTAssertTrue(nextRow.exists)
         XCTAssertGreaterThan(nextRow.frame.minY, first.frame.minY, "View all uses multiple rows, not a horizontal rail")
         capture("Full screen catalog grid")
+        focus(first)
+        remote.press(.select)
+        XCTAssertTrue(app.buttons["detail.play"].waitForExistence(timeout: 10))
+        remote.press(.menu)
+        XCTAssertTrue(back.waitForExistence(timeout: 10), "Back from a title restores View all first")
+        XCTAssertFalse(app.buttons["navigation.catalogs"].exists)
         remote.press(.menu)
         waitUntil("Back restores the catalog screen") {
             self.app.buttons["navigation.catalogs"].value as? String == "Selected"

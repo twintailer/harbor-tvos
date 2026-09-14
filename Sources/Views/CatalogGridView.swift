@@ -9,6 +9,7 @@ struct CatalogGridView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage(SubtitleStyle.Key.hideWatched) private var hideWatched = false
     @AppStorage(SubtitleStyle.Key.hideUnreleased) private var hideUnreleased = false
+    @AppStorage(SubtitleStyle.Key.posterScale) private var posterScale = 1.0
     @State private var items: [MetaItem]
     @State private var nextSkip: Int
     @State private var hasMore: Bool
@@ -36,8 +37,12 @@ struct CatalogGridView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let count = geometry.size.width > 1400 ? 6 : 5
-            let width = (geometry.size.width - 120 - CGFloat(count - 1) * 34) / CGFloat(count)
+            let available = max(1, geometry.size.width - 120)
+            let scale = CGFloat(max(0.1, posterScale))
+            let count = max(1, min(6, Int((available + 34) / (240 * scale + 34))))
+            // PosterCard applies the user's size multiplier itself. Allocate
+            // fewer columns for Large, then pass an unscaled width to the card.
+            let width = (available - CGFloat(count - 1) * 34) / CGFloat(count) / scale
             ScrollView {
                 VStack(alignment: .leading, spacing: 34) {
                     HStack(spacing: 24) {

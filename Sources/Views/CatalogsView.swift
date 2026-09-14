@@ -4,6 +4,7 @@ struct CatalogsView: View {
     @EnvironmentObject private var auth: AuthStore
     @State private var rows: [CatalogRow] = []
     @State private var loading = true
+    @State private var loadedRevision: String?
     @AppStorage(SubtitleStyle.Key.homeShowAllRows) private var showAllRows = false
 
     var body: some View {
@@ -28,10 +29,15 @@ struct CatalogsView: View {
             .navigationDestination(for: MetaItem.self) { DetailView(item: $0) }
         }
         .task(id: "\(addonRevision)-\(showAllRows)") {
+            let revision = "\(addonRevision)-\(showAllRows)"
+            // Popping View all/details must retain the existing row identities,
+            // loaded pages and focus position instead of rebuilding every rail.
+            guard loadedRevision != revision else { return }
             loading = true
             let result = await AddonService.homeRows(addons: auth.addons)
             guard !Task.isCancelled else { return }
             rows = result
+            loadedRevision = revision
             loading = false
         }
     }

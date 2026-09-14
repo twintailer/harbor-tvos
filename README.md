@@ -36,8 +36,15 @@ hardware verification. A successful compile or logic test is not a device soak t
 - A top navigation bar for Search, Home, Series, Movies, Anime, Catalogs and
   My Harbor, with Discover/Add-ons in More and direct access to Settings.
   Focusing a page tab selects it immediately, without an extra OK press
-- Reference-matched Liquid Glass player chrome with floating speed, subtitle,
-  audio, aspect and Anime4K menus
+- Compact player controls with a clear timeline, direct subtitle/audio access
+  and a More menu for speed, picture size, restart, source and playback engine
+- Top-ten Spotlight from the leading catalog, independent of Continue Watching,
+  with backdrop/logo metadata, eight-second rotation and manual indicators.
+  Autoplay pauses during carousel focus, in the background and with Reduce Motion
+- View all on catalog rows opens a full-screen, paginated poster grid. Back
+  preserves the parent catalog's loaded rows and navigation state
+- Global navigation and scrolling content occupy separate layout regions, so
+  page headings and focused cards cannot draw underneath the top bar
 - Back on Home returns to the Apple TV Home screen. Other top-level sections
   return to Harbor Home; details and settings subpages go back one level
 - Focus selects the wide preview in catalog and Continue Watching rows, with
